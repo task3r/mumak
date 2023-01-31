@@ -1,0 +1,13 @@
+ARG BASE="mumak:1.12.1"
+FROM ${BASE}
+
+RUN apt install -y autoconf automake build-essential cmake libsnappy-dev \
+    libbz2-dev zlib1g-dev libgflags-dev
+
+WORKDIR /root
+RUN git clone https://github.com/pmem/pmem-rocksdb
+
+WORKDIR /root/pmem-rocksdb
+RUN make ROCKSDB_ON_DCPMM=3 release -j$(nproc)
+
+WORKDIR /scripts

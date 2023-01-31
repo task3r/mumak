@@ -1,0 +1,42 @@
+ARG BASE="mumak:1.12.1"
+FROM ${BASE}
+
+RUN apt install -y autoconf automake build-essential cmake \
+	libnuma-dev libtbb-dev libtool rapidjson-dev libunwind-dev
+
+WORKDIR /root
+RUN git clone https://github.com/pmem/valgrind.git
+RUN git clone https://github.com/pmem/libpmemobj-cpp
+RUN git clone https://github.com/memkind/memkind
+RUN git clone https://github.com/pmem/pmemkv
+RUN git clone https://github.com/pmem/pmemkv-bench
+
+WORKDIR /root/valgrind
+RUN ./autogen.sh && ./configure && make && make install
+
+WORKDIR /root/libpmemobj-cpp
+RUN mkdir build
+WORKDIR /root/libpmemobj-cpp/build
+RUN cmake .. && make -j$(nproc) && make install
+
+WORKDIR /root/memkind
+RUN ./autogen.sh && ./configure && make && make install
+
+WORKDIR /root/pmemkv
+ARG PMEMKV_VERSION
+RUN test -n "$PMEMKV_VERSION" && git pull && git checkout ${PMEMKV_VERSION} || true
+RUN mkdir build
+WORKDIR /root/pmemkv/build
+RUN cmake .. -DBUILD_TESTS=OFF -DCMAKE_BUILD_TYPE=Release && \
+    make -j$(nproc) && make install
+
+WORKDIR /root/pmemkv-bench
+RUN make bench
+
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/local/lib
+
+WORKDIR /scripts
+
+# Example build: 
+# $ docker build -t pmemkv:mumak-1.8 . -f Dockerfile.pmemkv \
+#     --build-arg BASE=mumak:1.8 

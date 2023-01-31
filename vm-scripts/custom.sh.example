@@ -1,0 +1,16 @@
+#!/bin/bash
+
+# Example of optional configuration of enviornment with editor and tools
+
+echo "Customizing installation..."
+
+sudo add-apt-repository ppa:neovim-ppa/unstable
+sudo apt update
+sudo apt install -y neovim
+
+echo "alias vim=nvim" >>.bashrc
+
+git config --global user.email "you@example.com"
+git config --global user.name "Your Name"
+
+echo "Customization complete."

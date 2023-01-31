@@ -1,0 +1,489 @@
+#!/bin/bash
+
+# Aux consts
+SCRIPT=$(basename "${BASH_SOURCE[0]}")
+BOLD=$(tput bold)
+OFF=$(tput sgr0)
+
+# Arguments
+TOOLS='vanilla,bfi,onta,dofta,ndofta,coverage'
+TOOL_DELIM=','
+OUT_DIR='.'
+VERBOSE=false
+PRINT_FP_TRACES=false
+TARGET=''
+RECOVERY=''
+CLIENT=''
+CLIENT_RECOVERY=''
+TERMINATION=''
+SETUP=''
+PM_MOUNT='/mnt/pmem0'
+RAMDISK='/mnt/ramdisk/'
+SLEEP_PERIOD=1
+RECOVERY_TIMEOUT=5
+INSTRUCTION='all'
+ALLOC=32768
+TARGET_FP=''
+# FIXME: This could turn into a problem if a workload takes longer than x seconds
+# to reach an fp, this is hard to determine. An alternative would be to
+# terminate the target application if it reaches the end of the workload.
+MAX_TIME_TO_INJECT=60
+
+# Global vars
+TIMEFORMAT='%R'
+
+# Paths & Executables
+if [[ -z $MUMAK_ROOT ]]; then
+    MUMAK_TOOL_PATH="./instrumentation/src/obj-intel64"
+else
+    MUMAK_TOOL_PATH="$MUMAK_ROOT/instrumentation/src/obj-intel64"
+fi
+
+if [[ -z $PIN_ROOT ]]; then
+    echo "Set PIN_ROOT in order to run mumak."
+    exit 1
+else
+    PIN="$PIN_ROOT/pin"
+fi
+
+MUMAK_BFI_PATH="$MUMAK_TOOL_PATH/bfi.so"
+MUMAK_ONTA_PATH="$MUMAK_TOOL_PATH/onta.so"
+MUMAK_OFTA_PATH="$MUMAK_TOOL_PATH/ofta.so"
+MUMAK_ANALYZER_PATH="$MUMAK_TOOL_PATH/trace_analyzer.exe"
+
+function main {
+    parse_args "$@"
+    mkdir -p "$OUT_DIR"
+    local ts
+    ts=$(date +%y%m%d%H%M)
+
+    # to guarantee that core files are generated
+    ulimit -c unlimited
+
+    for tool in $(echo "$TOOLS" | tr "$TOOL_DELIM" " "); do
+        if [ "$(type -t "mumak_$tool")" != function ]; then
+            echo -e "Unrecognized tool $tool. Skipping..."
+            continue
+        fi
+        local file_prefix="$OUT_DIR/$tool-$ts"
+        rm -rf "$PM_MOUNT"/* 2>/dev/null
+        rm -f "$RAMDISK"/* 2>/dev/null
+
+        $VERBOSE && echo -e "===\t$tool\t==="
+        mumak_"$tool" |& tee "$file_prefix"-summary
+        $VERBOSE && echo -e "==================="\\n
+
+        if [[ $tool == 'dofta' || $tool == 'ndofta' || $tool == 'onta' ]]; then
+            # shellcheck disable=SC2016
+            local awk_command='{
+            if (!$1 || $0 ~ /\[BUG\]/) {
+                print $0
+            } else if ($4) {
+                path=substr($4,2,length($4)-2)
+                print $1" at "path
+            } else
+                print $1" at "$3
+            }'
+            sed -E "s/<.*>//;s/\+[0-9a-fx]+//g" "$RAMDISK"/bug-report.txt \
+                | awk "$awk_command" >"$file_prefix"-bugs
+        fi
+    done
+}
+
+function mumak_vanilla {
+    $VERBOSE && echo "vanilla -- $TARGET"
+    if [[ -z $CLIENT ]]; then
+        $TARGET
+    else
+        $TARGET &
+        target_pid=$!
+        sleep $SLEEP_PERIOD
+        $CLIENT
+        [[ -n $TERMINATION ]] && $TERMINATION
+        wait $target_pid &>/dev/null
+    fi
+}
+
+function fi_loop {
+    local tool=$1
+    local fps=$2
+    if [[ -n $TARGET_FP ]]; then
+        fi_iter $tool $TARGET_FP
+    else
+        echo "Failure points: $fps"
+        for ((fp = 0; fp < fps; fp++)); do
+            fi_iter $tool $fp
+        done
+    fi
+    echo -e "\n-----------"
+}
+
+function fi_iter {
+    local tool=$1
+    local fp=$2
+    echo -e "\n-----------"
+    printf "testing %s..." "$fp"
+    rm -rf "$PM_MOUNT"/* 2>/dev/null
+    rm -f $RAMDISK/fp-backtrace.out 2>/dev/null
+    [[ -n $SETUP ]] && $SETUP &>/dev/null
+    printf "injecting fault..."
+    basic_inject_fault "$tool" "$fp" &>/dev/null
+    if [[ $? -eq 137 ]]; then
+        printf "exceeded time to inject fault, skipping..."
+        return
+    fi
+    chmod 0666 -R "$PM_MOUNT"/*
+    printf "recovering..."
+    basic_recover "$fp" &>$RAMDISK/mumak_recovery_out
+    local recovery_exit_code=$?
+    if ! recovery_ok $recovery_exit_code; then
+        printf "BUG!\n"
+        cat $RAMDISK/mumak_recovery_out
+        # if it was a segfault or assertion failure, print backtrace
+        if [[ $recovery_exit_code -eq 139 || $recovery_exit_code -eq 134 ]] && $VERBOSE; then
+            gdb "$TARGET_EXE" "$(get_latest_coredump)" -batch -ex 'bt'
+        fi
+    fi
+    if $PRINT_FP_TRACES || ! recovery_ok $recovery_exit_code; then
+        printf "\nFault injected at:\n"
+        # shellcheck disable=SC2016
+        local awk_command='{
+            if ($4) {
+                path=substr($4,2,length($4)-2)
+                print $1" at "path
+            } else
+                print $1" at "$3
+            }'
+        sed -E "s/<.*>//;s/\+[0-9a-fx]+//g" "$RAMDISK/fp-backtrace.out" | awk "$awk_command"
+    fi
+}
+
+function get_latest_coredump {
+    find /tmp/core* -printf "%T@ %Tc %p\n" | sort -n | awk '{print $(NF)}' | tail -n 1
+}
+
+function recovery_ok {
+    local exit_code=$1
+    # 0 -> all is well, 137 -> reached timeout so we also assume all is well
+    # anything else we consider a bug and print the backtrace of where the
+    # fault was injected
+    [[ $exit_code -eq 0 || $exit_code -eq 137 ]]
+}
+
+function basic_inject_fault {
+    local tool=$1
+    local fp=$2
+    [[ -n $TARGET_FP ]] && aux_opt="-fail_target $TARGET_FP" || aux_opt=""
+    if [[ -z $CLIENT ]]; then
+        # for some reason this does not work if $TARGET is double-quoted
+        # shellcheck disable=SC2086
+        timeout -s SIGKILL $MAX_TIME_TO_INJECT $PIN -t "$tool" -trace-out \
+            $RAMDISK/fp-backtrace.out -tree $RAMDISK/tree.bin -target \
+            "$INSTRUCTION" -inject -alloc "$ALLOC" -pm-mount "$PM_MOUNT" \
+            $aux_opt -- $TARGET
+    else
+        # shellcheck disable=SC2086
+        timeout -s SIGKILL $MAX_TIME_TO_INJECT $PIN -t "$tool" -trace-out \
+            $RAMDISK/fp-backtrace.out -tree $RAMDISK/tree.bin -target \
+            "$INSTRUCTION" -inject -alloc "$ALLOC" -pm-mount "$PM_MOUNT" \
+            $aux_opt -- $TARGET &
+        target_pid=$!
+        (
+            sleep $SLEEP_PERIOD
+            $CLIENT
+            [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        ) &
+        client_pid=$!
+        wait $target_pid &>/dev/null
+        exit_code=$?
+        kill $client_pid &>/dev/null
+        wait $client_pid &>/dev/null
+        return $exit_code
+    fi
+}
+
+function basic_recover {
+    local exit_code
+    local target_pid
+    local client_pid
+    if [[ -z $CLIENT_RECOVERY ]]; then
+        timeout -s SIGKILL $RECOVERY_TIMEOUT $RECOVERY
+    else
+        timeout -s SIGKILL $RECOVERY_TIMEOUT $RECOVERY &
+        target_pid=$!
+        (
+            sleep $SLEEP_PERIOD
+            $CLIENT_RECOVERY
+            [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        ) &
+        client_pid=$!
+        wait $target_pid &>/dev/null
+        exit_code=$?
+        kill $client_pid &>/dev/null
+        wait $client_pid &>/dev/null
+        return $exit_code
+    fi
+}
+
+function count_fps {
+    rm -f $RAMDISK/bfi-fp-count.out &>/dev/null
+
+    [[ -n $SETUP ]] && $SETUP &>/dev/null
+    # count failure points
+    if [[ -z $CLIENT ]]; then
+        $PIN -t "$MUMAK_BFI_PATH" -tree $RAMDISK/tree.bin -count-out \
+            $RAMDISK/bfi-fp-count.out -target "$INSTRUCTION" -alloc "$ALLOC" \
+            -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
+    else
+        $PIN -t "$MUMAK_BFI_PATH" -tree $RAMDISK/tree.bin -count-out \
+            $RAMDISK/bfi-fp-count.out -target "$INSTRUCTION" -alloc "$ALLOC" \
+            -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
+        target_pid=$!
+        sleep $SLEEP_PERIOD
+        $CLIENT &>/dev/null
+        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        wait $target_pid &>/dev/null
+    fi
+}
+
+function mumak_bfi {
+    $VERBOSE && echo "bfi -- $TARGET"
+
+    if [[ -z $RECOVERY ]]; then
+        echo -e "Missing recovery args. Skipping bfi..."\\n
+        return
+    fi
+
+    count_fps
+
+    local fps
+    fps=$(cat $RAMDISK/bfi-fp-count.out)
+
+    fi_loop "$MUMAK_BFI_PATH" "$fps"
+}
+
+function mumak_coverage {
+    $VERBOSE && echo "coverage -- $TARGET"
+
+    count_fps
+
+    local fps
+    fps=$(cat $RAMDISK/bfi-fp-count.out)
+
+    echo "Failure points: $fps"
+}
+
+function mumak_onta {
+    $VERBOSE && echo "onta -- $TARGET"
+
+    [[ -n $SETUP ]] && $SETUP &>/dev/null
+    if [[ -z $CLIENT ]]; then
+        $PIN -t "$MUMAK_ONTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
+    else
+        $PIN -t "$MUMAK_ONTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
+        target_pid=$!
+        sleep $SLEEP_PERIOD
+        $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        wait $target_pid &>/dev/null
+    fi
+}
+
+function mumak_dofta {
+    $VERBOSE && echo "dofta -- $TARGET"
+
+    [[ -n $SETUP ]] && $SETUP &>/dev/null
+    if [[ -z $CLIENT ]]; then
+        $PIN -t "$MUMAK_OFTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- \
+            $TARGET >/dev/null
+    else
+        $PIN -t "$MUMAK_OFTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- \
+            $TARGET >/dev/null &
+        target_pid=$!
+        sleep $SLEEP_PERIOD
+        $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        wait $target_pid &>/dev/null
+    fi
+
+    $MUMAK_ANALYZER_PATH "$RAMDISK"
+    sort -k2 -n -o /mnt/ramdisk/bug-ids.txt /mnt/ramdisk/bug-ids.txt
+    rm -rf "$PM_MOUNT"/* 2>/dev/null
+
+    [[ -n $SETUP ]] && $SETUP &>/dev/null
+    if [[ -z $CLIENT ]]; then
+        $PIN -t "$MUMAK_OFTA_PATH" -backtrace -dir "$RAMDISK" \
+            -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
+    else
+        $PIN -t "$MUMAK_OFTA_PATH" -backtrace -dir "$RAMDISK" \
+            -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
+        target_pid=$!
+        sleep $SLEEP_PERIOD
+        $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        wait $target_pid &>/dev/null
+    fi
+}
+
+function mumak_ndofta {
+    $VERBOSE && echo "ndofta -- $TARGET"
+
+    [[ -n $SETUP ]] && $SETUP &>/dev/null
+    if [[ -z $CLIENT ]]; then
+        $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic \
+            -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
+    else
+        $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic \
+            -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
+        target_pid=$!
+        sleep $SLEEP_PERIOD
+        $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        wait $target_pid &>/dev/null
+    fi
+
+    $MUMAK_ANALYZER_PATH "$RAMDISK"
+    sort -k2 -n -o /mnt/ramdisk/bug-ids.txt /mnt/ramdisk/bug-ids.txt
+    rm -rf "$PM_MOUNT"/* 2>/dev/null
+
+    [[ -n $SETUP ]] && $SETUP &>/dev/null
+    if [[ -z $CLIENT ]]; then
+        $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic -backtrace \
+            -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
+    else
+        $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic -backtrace \
+            -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
+        target_pid=$!
+        sleep $SLEEP_PERIOD
+        $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        wait $target_pid &>/dev/null
+    fi
+}
+
+function parse_args {
+    while getopts x:X:c:C:k:K:t:i:o:m:d:s:T:I:F:a:f:vph FLAG; do
+        case $FLAG in
+        x) readonly TARGET=$OPTARG ;;
+        X) readonly RECOVERY=$OPTARG ;;
+        c) readonly CLIENT=$OPTARG ;;
+        C) readonly CLIENT_RECOVERY=$OPTARG ;;
+        k) readonly TERMINATION=$OPTARG ;;
+        K) readonly SETUP=$OPTARG ;;
+        t) readonly TOOLS=$OPTARG ;;
+        i) readonly INSTRUCTION=$OPTARG ;;
+        o) readonly OUT_DIR=$OPTARG ;;
+        m) readonly PM_MOUNT=$OPTARG ;;
+        d) readonly RAMDISK=$OPTARG ;;
+        s) readonly SLEEP_PERIOD=$OPTARG ;;
+        T) readonly RECOVERY_TIMEOUT=$OPTARG ;;
+        I) readonly MAX_TIME_TO_INJECT=$OPTARG ;;
+        F) readonly TARGET_FP=$OPTARG ;;
+        a) readonly ALLOC=$OPTARG ;;
+        v) readonly VERBOSE=true ;;
+        p) readonly PRINT_FP_TRACES=true ;;
+        f)
+            load_config "$OPTARG"
+            ;;
+        h)
+            show_help
+            exit 0
+            ;;
+        \?) #unrecognized option - show help
+            echo -e \\n"Option -${BOLD}$OPTARG${OFF} not allowed."
+            show_help
+            exit 1
+            ;;
+        esac
+    done
+
+    TARGET_EXE=${TARGET%% *}
+
+    if [[ $VERBOSE == true ]]; then
+        echo -e "Target:  $TARGET"
+        echo -e "         recovery=$RECOVERY"
+        if [[ -n $CLIENT ]]; then
+            echo -e "         client=$CLIENT"
+            echo -e "         client-recovery=$CLIENT_RECOVERY"
+        fi
+        echo -e "         termination=$TERMINATION"
+        echo -e "         setup=$SETUP"
+        echo -e "Options: tools=$TOOLS"
+        echo -e "         fail-instruction=$INSTRUCTION"
+        echo -e "         output-directory=$OUT_DIR"
+        echo -e "         pm-mount=$PM_MOUNT"
+        echo -e "         ramdisk=$RAMDISK"
+        echo -e "         max-period-to-inject=$MAX_TIME_TO_INJECT"
+        echo -e "         sleep-period=$SLEEP_PERIOD"
+        echo -e "         fp-allocation=$ALLOC"
+        echo -e "         print-fp-traces=$PRINT_FP_TRACES"
+        echo -e "         target-fp=$TARGET_FP"
+        echo -e "         recovery-timeout=$RECOVERY_TIMEOUT"\\n
+    fi
+    if [[ -z $TARGET ]]; then # if there is no target invocation
+        echo -e "${BOLD}Missing target invocation."\\n
+        show_help
+        exit 1
+    fi
+}
+
+function get_config {
+    (grep -E "^${2}=" -m 1 "${1}" 2>/dev/null || echo "VAR=__UNDEFINED__") | head -n 1 | cut -d '=' -f 2-
+}
+
+function load_config {
+    local config_file=$1
+    for config in TARGET RECOVERY CLIENT CLIENT_RECOVERY TERMINATION TOOLS \
+        INSTRUCTION OUT_DIR PM_MOUNT RAMDISK MAX_TIME_TO_INJECT SLEEP_PERIOD \
+        ALLOC RECOVERY_TIMEOUT VERBOSE PRINT_FP_TRACES; do
+        val="$(get_config "$config_file" "$config")"
+        if [ "${val}" != "__UNDEFINED__" ]; then
+            eval "$config=$val"
+        fi
+    done
+}
+
+function show_help {
+    echo -e "Usage: ${BOLD}$SCRIPT -x target [-X target_recovery] [-c client] [-C client_recovery]"
+    echo -e "       [-k target_termination] [-t vanilla,bfi,onta,dofta,ndofta,coverage]"
+    echo -e "       [-i all,clflush,clflushopt,clwb,movnt,sfence,store] [-o dir]"
+    echo -e "       [-m pm_mount] [-d ramdisk] [-F fp] [-a size] [-f file] [-v]${OFF}"
+    echo -e "Efficient and blackbox detection of crash-consistency bugs in"
+    echo -e "Persistent Memory programs.\n"
+    echo -e "  -x cmd       Target execution."
+    echo -e "  -X cmd       Recovery execution. Only required for using fault-injection tools."
+    echo -e "  -c cmd       Client invocation (used for client-server applications)."
+    echo -e "  -C cmd       Client recovery invocation (used for client-server applications)."
+    echo -e "  -k cmd       Explicit target termination."
+    echo -e "  -K cmd       Explicit target setup/initialization."
+    echo -e "  -t t1,t2,... Mumak tools to use during analysis separated by '$TOOL_DELIM'."
+    echo -e "               Defaults to ${BOLD}all${OFF}."
+    echo -e "  -i inst      Instruction to fail (all, clwb, clflush, clflushopt, sfence, movnt)"
+    echo -e "               Defaults to ${BOLD}all${OFF}."
+    echo -e "  -o dir       Output directory for the results (created if it does not exist)."
+    echo -e "               Defaults to ${BOLD}local folder (.)${OFF}."
+    echo -e "  -m path      PM mount path, used only to collect PM usage."
+    echo -e "               Defaults to ${BOLD}/mnt/pmem0${OFF}."
+    echo -e "  -d path      RAM disk mount path, used for trace analysis tools."
+    echo -e "               Defaults to ${BOLD}/mnt/ramdisk${OFF}."
+    echo -e "  -s period    Sleep period (in seconds) between server and client invocations."
+    echo -e "               Defaults to ${BOLD}1${OFF}."
+    echo -e "  -T period    Recovery timeout period (in seconds)."
+    echo -e "               Defaults to ${BOLD}5${OFF}."
+    echo -e "  -I period    Max fault injection period (in seconds)."
+    echo -e "               Defaults to ${BOLD}60${OFF}."
+    echo -e "  -F fp        Index of specific failure point to target."
+    echo -e "  -a size      Allocation for failure point tree (in bytes)."
+    echo -e "               Defaults to ${BOLD}32768${OFF}."
+    echo -e "  -f file      Set options through a configuration file."
+    echo -e "  -v           Increased verbosity."
+    echo -e "               Defaults to ${BOLD}false${OFF}."
+    echo -e "  -p           Print backtraces for all failure points (bug or not)."
+    echo -e "               Defaults to ${BOLD}false${OFF}."
+    echo -e "  -h           Display this help message."\\n
+    echo -e "Example:"
+    echo -e "${BOLD}$SCRIPT -o output -v -t vanilla,bfi,dofta -x \"./target args\" -X \"./target recovery\"${OFF}"\\n
+}
+
+# Start script
+main "$@"

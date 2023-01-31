@@ -1,0 +1,28 @@
+ARG BASE="mumak:1.12.1"
+FROM ${BASE}
+
+RUN apt install -y autoconf automake libtool numactl tcl curl default-jdk
+
+WORKDIR /root
+RUN git clone --depth 1 --branch 3.2-nvml https://github.com/pmem/redis/
+
+WORKDIR /root/redis
+RUN git clone --depth 1 --branch 1.8 -q https://github.com/pmem/pmdk.git deps/pmdk
+WORKDIR /root/redis/deps/pmdk
+RUN make EXTRA_CFLAGS="-Wno-error" -j$(nproc)
+WORKDIR /root/redis
+RUN make USE_PMDK=yes STD=-std=gnu99 -j$(nproc)
+RUN sed -i "s/~\/redis.pm/\/mnt\/pmem0\/redis\.pm/g" redis.conf
+
+ENV LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+
+COPY scripts/kill-redis.sh /scripts
+WORKDIR /scripts
+
+# Example build: 
+# $ docker build -t redis-nvml:mumak-1.8 . -f Dockerfile.redis \
+#     --build-arg BASE=mumak:1.8
+
+# /root/redis/src/redis-server /root/redis/redis.conf
+# echo "shutdown" | /root/redis/src/redis-cli
+# /root/redis/src/redis-benchmark -c 1 -n 100000 -t set,get

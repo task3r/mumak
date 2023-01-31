@@ -1,0 +1,17 @@
+# example config, note that not all options are required for every analysis
+TARGET='./target'
+RECOVERY='./target recovery'
+CLIENT='./client'
+CLIENT_RECOVERY='./client recovery'
+TERMINATION='./kill-target'
+SETUP='./setup-target'
+TOOLS='vanilla,bfi,onta,dofta,ndofta'
+INSTRUCTION='all'
+OUT_DIR='.'
+PM_MOUNT='/mnt/pmem0'
+RAMDISK='/mnt/ramdisk'
+MAX_TIME_TO_INJECT=60
+SLEEP_PERIOD=1
+ALLOC=32768
+RECOVERY_TIMEOUT=5
+VERBOSE=true

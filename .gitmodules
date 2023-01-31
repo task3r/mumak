@@ -1,0 +1,6 @@
+[submodule "docker/witcher"]
+	path = docker/witcher
+	url = https://github.com/task3r/witcher.git
+[submodule "docker/montage"]
+	path = docker/montage
+	url = https://github.com/task3r/montage.git

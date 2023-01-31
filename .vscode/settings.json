@@ -1,0 +1,45 @@
+{
+    "files.watcherExclude": {
+        "**/tools": true
+    },
+    "files.associations": {
+        "*.gpl": "gnuplot",
+        "*.rules": "makefile",
+        "mumak": "shellscript",
+        "*.ph": "cpp",
+        "fstream": "cpp",
+        "ostream": "cpp",
+        "type_traits": "cpp",
+        "array": "cpp",
+        "*.tcc": "cpp",
+        "functional": "cpp",
+        "random": "cpp",
+        "istream": "cpp",
+        "new": "cpp",
+        "sstream": "cpp",
+        "streambuf": "cpp",
+        "utility": "cpp",
+        "atomic": "cpp",
+        "bit": "cpp",
+        "deque": "cpp",
+        "list": "cpp",
+        "string": "cpp",
+        "vector": "cpp",
+        "algorithm": "cpp",
+        "memory_resource": "cpp",
+        "string_view": "cpp",
+        "memory": "cpp",
+        "initializer_list": "cpp",
+        "stdexcept": "cpp",
+        "tuple": "cpp"
+    },
+    "[cpp]": {
+        "editor.defaultFormatter": "ms-vscode.cpptools"
+    },
+    "C_Cpp.clang_format_fallbackStyle": "{ BasedOnStyle: Google, IndentWidth: 4, ColumnLimit: 80}",
+    "cmake.configureOnOpen": false,
+    "todo-tree.filtering.excludeGlobs": [
+        "**/node_modules",
+        "tools"
+    ]
+}
