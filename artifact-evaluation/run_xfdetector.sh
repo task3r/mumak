@@ -4,7 +4,11 @@ mkdir -p xfdetector
 for target in btree rbtree hashmap_atomic; do
     #for iter in {1..3}; do
     for iter in {1..1}; do
-        prefix="xfdetector-${target}_spt-$iter"
+        if [[ $target = "hashmap_atomic" ]]; then
+            prefix="xfdetector-hashmap_spt-$iter"
+        else
+            prefix="xfdetector-${target}_spt-$iter"
+        fi
         echo "$prefix"
         mkdir -p xfdetector/"$prefix"-tmp
         docker run -it \
@@ -15,7 +19,7 @@ for target in btree rbtree hashmap_atomic; do
             xfdetector \
             collect-resources \
             -o "/out/$prefix.csv" -- \
-            /scripts/xfdetector-test.sh "$target 0 1 $iter" \
+            /scripts/xfdetector-test.sh "$target 0 50000 $iter" \
             >"results/$prefix.out"
         docker system prune -f
     done

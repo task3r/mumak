@@ -3,7 +3,13 @@
 mkdir -p agamotto
 for target in btree rbtree hashmap_atomic btree_spt rbtree_spt hashmap_atomic_spt; do
     for iter in {1..3}; do
-        prefix="agamotto-$target-$iter"
+        if [[ $target = "hashmap_atomic" ]]; then
+            prefix="agamotto-hashmap-$iter"
+        elif [[ $target = "hashmap_atomic_spt" ]]; then
+            prefix="agamotto-hashmap_spt-$iter"
+        else
+            prefix="agamotto-$target-$iter"
+        fi
         echo "$prefix"
         docker run -it \
             -v /mnt/pmem0:/mnt/pmem0 \

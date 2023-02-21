@@ -13,9 +13,9 @@ for tool in mumak_pmdk1dot6 xfdetector agamotto; do
         else
             tail -n 1 -q results/$tool-$target-*.out | awk -F , '{time+=$1;pm+=$2;cpu+=$5;ram+=$8} END {print time/NR,cpu/NR,ram/NR,pm/NR }' >"results/$tool-$target".out
             awk '{ printf $2"\t"$3"\t"$4"\t" }' "results/$tool-$target".out
-            point="${tool}_${target}_"
+            point="${tool}_${target}"
             value=$(cut -d " " -f 1 "results/$tool-$target".out)
-            sed -i "s/\$${point^^}\$/$value/" $DAT_FILE
+            sed -i "s/\\\$${point^^}\\\$/$value/" $DAT_FILE
         fi
     done
     printf "\n"
