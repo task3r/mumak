@@ -1,9 +1,0 @@
-diff --git a/Dockerfile b/Dockerfile
-index a95f9b2..5a6e627 100644
---- a/Dockerfile
-+++ b/Dockerfile
-@@ -66,3 +66,4 @@ RUN chmod u+x -R /scripts
- COPY configs $MUMAK_ROOT/configs
- 
- ENV LD_PRELOAD=$MUMAK_ROOT/tools/pmdk/src/debug/libpmem.so.1:$MUMAK_ROOT/tools/pmdk/src/debug/libpmemobj.so.1
-+ENV PMEM_IS_PMEM_FORCE=1

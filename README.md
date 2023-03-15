@@ -1,6 +1,10 @@
-# Mumak: efficient and black-box bug detection for Persistent Memory
+# Mumak: Efficient and Black-Box Bug Detection for Persistent Memory
 
-Gonçalves, João and Matos, Miguel, and Rodrigues, Rodrigo, "Mumak: efficient and black-box bug detection for Persistent Memory", in Proceedings of the EuroSys Conference, May 8-12, 2023, Rome, Italy.
+João Gonçalves, Miguel Matos, and Rodrigo Rodrigues. 2023.
+Mumak: Efficient and Black-Box Bug Detection for Persistent Memory.
+In Eighteenth European Conference on Computer Systems (EuroSys ’23),
+May 8–12, 2023, Rome, Italy. ACM, New York, NY, USA, 17 pages.
+https://doi.org/10.1145/3552326.3587447
 
 ## Artifact evaluation
 
