@@ -6,6 +6,8 @@ In Eighteenth European Conference on Computer Systems (EuroSys ’23),
 May 8–12, 2023, Rome, Italy. ACM, New York, NY, USA, 17 pages.
 https://doi.org/10.1145/3552326.3587447
 
+[![DOI](https://zenodo.org/badge/595640078.svg)](https://zenodo.org/badge/latestdoi/595640078)
+
 ## Artifact evaluation
 
 The [Artifact Evaluation folder](artifact-evaluation) contains all the necessary instructions and scripts used to reproduce the results and the figures from the original paper.
