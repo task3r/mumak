@@ -30,8 +30,10 @@ Vagrant.configure('2') do |config|
     mkdir -p /mnt/ramdisk
     mount -t tmpfs -o rw,size=2G tmpfs /mnt/pmem0
     mount -t tmpfs -o rw,size=2G tmpfs /mnt/ramdisk
+    mkdir /tmp/cfg
     chown vagrant /mnt/pmem0/
     chown vagrant /mnt/ramdisk/
+    chown vagrant /tmp/cfg/
   SHELL
 
   config.vm.provision 'shell', path: 'scripts/setup_host.sh', :run => 'always', privileged: true

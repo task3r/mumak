@@ -1,0 +1,21 @@
+ARG BASE="vardalith"
+FROM ${BASE}
+
+
+RUN apt install -y autoconf automake build-essential cmake \
+	intel-mkl libpmemobj-cpp-dev
+
+WORKDIR /root
+RUN git clone https://github.com/olemon111/WIPE
+
+WORKDIR /root/WIPE
+
+COPY wipe.patch .
+RUN git apply --ignore-space-change --ignore-whitespace wipe.patch
+
+RUN mkdir -p build
+WORKDIR /root/WIPE/build
+RUN cmake -DCMAKE_BUILD_TYPE=Debug ..
+RUN make -j
+
+WORKDIR /scripts

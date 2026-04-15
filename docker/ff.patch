@@ -1,0 +1,33 @@
+diff --git a/concurrent_pmdk/src/test.cpp b/concurrent_pmdk/src/test.cpp
+index 12efd0b..de5b598 100644
+--- a/concurrent_pmdk/src/test.cpp
++++ b/concurrent_pmdk/src/test.cpp
+@@ -7,13 +7,13 @@ static inline int file_exists(char const *file) { return access(file, F_OK); }
+ 
+ void clear_cache() {
+   // Remove cache
+-  int size = 256 * 1024 * 1024;
+-  char *garbage = new char[size];
+-  for (int i = 0; i < size; ++i)
+-    garbage[i] = i;
+-  for (int i = 100; i < size; ++i)
+-    garbage[i] += garbage[i - 100];
+-  delete[] garbage;
++  // int size = 256 * 1024 * 1024;
++  // char *garbage = new char[size];
++  // for (int i = 0; i < size; ++i)
++  //   garbage[i] = i;
++  // for (int i = 100; i < size; ++i)
++  //   garbage[i] += garbage[i - 100];
++  // delete[] garbage;
+ }
+ 
+ // MAIN
+@@ -35,6 +35,7 @@ int main(int argc, char **argv) {
+       break;
+     case 'i':
+       input_path = optarg;
++      break;
+     case 'p':
+       persistent_path = optarg;
+     default:

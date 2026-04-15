@@ -1,0 +1,31 @@
+diff --git a/include/bench.hpp b/include/bench.hpp
+index 1f65db1..20714e5 100644
+--- a/include/bench.hpp
++++ b/include/bench.hpp
+@@ -150,7 +150,7 @@ private:
+ 
+         sync_point.get()->arrive_and_wait();
+ 
+-        pm_watch *w;
++        // pm_watch *w;
+         /* wait or issue the start signal for the second phase: run */
+         if (is_main_worker) {
+             for (auto &[_, ctx] : profiler->ctxs) {
+@@ -158,7 +158,7 @@ private:
+                 ctx->write_count = 0;
+             }
+             fmt::print("Run Phase\n");
+-            w = new pm_watch();
++            // w = new pm_watch();
+             test_pointer.store(0);
+         }
+ 
+@@ -235,7 +235,7 @@ private:
+ #ifdef REALTIMETHROUGHPUT
+         profiler->realtime_point[worker_id] = work_done_point;
+ #endif
+-        if (is_main_worker) { delete w; }
++        // if (is_main_worker) { delete w; }
+     }
+ 
+     void open_table() {

@@ -1,0 +1,19 @@
+ARG BASE="mumak:1.12.1"
+FROM ${BASE}
+
+RUN apt install -y libjemalloc-dev
+
+COPY workloads /workloads
+
+WORKDIR /root
+RUN git clone https://github.com/utsaslab/RECIPE
+
+WORKDIR /root/RECIPE/P-CLHT
+COPY docker/pclht.patch .
+RUN git checkout 70bf21c
+RUN git apply --ignore-space-change --ignore-whitespace pclht.patch
+WORKDIR /root/RECIPE/P-CLHT/build
+RUN cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j
+
+WORKDIR /scripts
+ENV LD_PRELOAD=$MUMAK_ROOT/tools/pmdk/src/debug/libpmem.so.1:$MUMAK_ROOT/tools/pmdk/src/debug/libpmemobj.so.1

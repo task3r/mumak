@@ -1,0 +1,5 @@
+*.out
+plots/*.eps
+result/*.out
+results/*.csv
+results/*.summary

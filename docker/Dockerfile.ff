@@ -1,0 +1,15 @@
+ARG BASE="mumak:1.12.1"
+FROM ${BASE}
+
+RUN apt install -y autoconf automake build-essential cmake libsnappy-dev \
+    libbz2-dev zlib1g-dev libgflags-dev
+
+COPY workloads /workloads
+
+WORKDIR /root
+RUN git clone https://github.com/DICL/FAST_FAIR
+
+WORKDIR /root/FAST_FAIR/concurrent_pmdk
+COPY docker/ff.patch .
+RUN git apply ff.patch
+RUN make 

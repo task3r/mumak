@@ -1,0 +1,170 @@
+diff --git a/CCEH-PMDK/Makefile b/CCEH-PMDK/Makefile
+index c71f10b..2a6f83e 100644
+--- a/CCEH-PMDK/Makefile
++++ b/CCEH-PMDK/Makefile
+@@ -1,7 +1,7 @@
+ .PHONY: all clean
+ 
+-CXX := g++ -O3 -std=c++17
+-CFLAGS := -I./ -lrt
++CXX := g++ -O0 -std=c++17
++CFLAGS := -I./ -lrt -g
+ 
+ all: test
+ 
+diff --git a/CCEH-PMDK/src/test.cpp b/CCEH-PMDK/src/test.cpp
+index 2d7b25c..aca7cb9 100644
+--- a/CCEH-PMDK/src/test.cpp
++++ b/CCEH-PMDK/src/test.cpp
+@@ -16,23 +16,28 @@ using namespace std;
+ #define POOL_SIZE (10737418240) // 10GB
+ 
+ void clear_cache() {
+-    int* dummy = new int[1024*1024*256];
+-    for (int i=0; i<1024*1024*256; i++) {
+-	dummy[i] = i;
+-    }
+-
+-    for (int i=100;i<1024*1024*256;i++) {
+-	dummy[i] = dummy[i-rand()%100] + dummy[i+rand()%100];
+-    }
+-
+-    delete[] dummy;
++ //    int* dummy = new int[1024*1024*256];
++ //    for (int i=0; i<1024*1024*256; i++) {
++	// dummy[i] = i;
++ //    }
++	//
++ //    for (int i=100;i<1024*1024*256;i++) {
++	// dummy[i] = dummy[i-rand()%100] + dummy[i+rand()%100];
++ //    }
++	//
++ //    delete[] dummy;
+ }
+ 
+ 
+ int main (int argc, char* argv[])
+ {
+-    if(argc < 3){
+-	cerr << "Usage: " << argv[0] << "path numData" << endl;
++#ifdef MULTITHREAD
++    if(argc < 5){
++	cerr << "Usage: " << argv[0] << " db_path num_data input_path num_threads" << endl;
++#else
++    if(argc < 4){
++	cerr << "Usage: " << argv[0] << " db_path num_data input_path" << endl;
++#endif
+ 	exit(1);
+     }
+     const size_t initialSize = 1024*16;
+@@ -40,7 +45,7 @@ int main (int argc, char* argv[])
+     strcpy(path, argv[1]);
+     int numData = atoi(argv[2]);
+ #ifdef MULTITHREAD
+-    int numThreads = atoi(argv[3]);
++    int numThreads = atoi(argv[4]);
+ #endif
+     struct timespec start, end;
+     uint64_t elapsed;
+@@ -78,7 +83,7 @@ int main (int argc, char* argv[])
+     uint64_t* keys = new uint64_t[numData];
+ 
+     ifstream ifs;
+-    string dataset = "/home/chahg0129/dataset/input_rand.txt";
++    string dataset = argv[3];
+     ifs.open(dataset);
+     if (!ifs){
+ 	cerr << "No file." << endl;
+@@ -124,70 +129,35 @@ int main (int argc, char* argv[])
+     }
+ 
+ #else // multi-threaded
+-    vector<thread> insertingThreads;
+-    vector<thread> searchingThreads;
++    vector<thread> threads;
+     int chunk_size = numData/numThreads;
+ 
+-    if(!exists){
+-	{ // INSERT
+-	    auto insert = [&pop, &HashTable, &keys](int from, int to){
+-		for(int i=from; i<to; i++){
+-		    D_RW(HashTable)->Insert(pop, keys[i], reinterpret_cast<Value_t>(keys[i]));
+-		}
+-	    };
+-
+-	    cout << "Start Insertion" << endl;
+-	    clear_cache();
+-	    clock_gettime(CLOCK_MONOTONIC, &start);
+-	    for(int i=0; i<numThreads; i++){
+-		if(i != numThreads-1)
+-		    insertingThreads.emplace_back(thread(insert, chunk_size*i, chunk_size*(i+1)));
+-		else
+-		    insertingThreads.emplace_back(thread(insert, chunk_size*i, numData));
++    auto insert = [&pop, &HashTable, &keys](int from, int to){
++	for(int i=from; i<to; i++){ 
++	    if (i % 10 < 3) {
++		D_RW(HashTable)->Insert(pop, keys[i], reinterpret_cast<Value_t>(keys[i]));
++	    } else if (i % 10 < 6) {
++		D_RW(HashTable)->Delete(keys[i]);
++	    } else {
++		D_RW(HashTable)->Get(keys[i]);
+ 	    }
+-
+-	    for(auto& t: insertingThreads) t.join();
+-	    clock_gettime(CLOCK_MONOTONIC, &end);
+-
+-	    elapsed = (end.tv_sec - start.tv_sec)*1000000000 + (end.tv_nsec - start.tv_nsec);
+-	    cout << elapsed/1000 << "\tusec\t" << (uint64_t)(1000000*(numData/(elapsed/1000.0))) << "\tOps/sec\tInsertion" << endl;
+ 	}
++    };
++
++    cout << "Start" << endl;
++    clock_gettime(CLOCK_MONOTONIC, &start);
++    for(int i=0; i<numThreads; i++){
++	if(i != numThreads-1)
++	    threads.emplace_back(thread(insert, chunk_size*i, chunk_size*(i+1)));
++	else
++	    threads.emplace_back(thread(insert, chunk_size*i, numData));
+     }
+ 
+-    { // SEARCH
+-	int failedSearch = 0;
+-	vector<int> searchFailed(numThreads);
+-
+-	auto search = [&pop, &HashTable, &keys, &searchFailed](int from, int to, int tid){
+-	    int fail_cnt = 0;
+-	    for(int i=from; i<to; i++){
+-		auto ret = D_RW(HashTable)->Get(keys[i]);
+-		if(ret != reinterpret_cast<Value_t>(keys[i])){
+-		    fail_cnt++;
+-		}
+-	    }
+-	    searchFailed[tid] = fail_cnt;
+-	};
+-
+-	cout << "Start Search" << endl;
+-	clear_cache();
+-	clock_gettime(CLOCK_MONOTONIC, &start);
+-	for(int i=0; i<numThreads; i++){
+-	    if(i != numThreads-1)
+-		searchingThreads.emplace_back(thread(search, chunk_size*i, chunk_size*(i+1), i));
+-	    else
+-		searchingThreads.emplace_back(thread(search, chunk_size*i, numData, i));
+-	}
+-
+-	for(auto& t: searchingThreads) t.join();
+-	clock_gettime(CLOCK_MONOTONIC, &end);
+-
+-	elapsed = (end.tv_sec - start.tv_sec)*1000000000 + (end.tv_nsec - start.tv_nsec);
+-	cout << elapsed/1000 << "\tusec\t" << (uint64_t)(1000000*(numData/(elapsed/1000.0))) << "\tOps/sec\tSearch" << endl;
++    for(auto& t: threads) t.join();
++    clock_gettime(CLOCK_MONOTONIC, &end);
+ 
+-	for(auto& v: searchFailed) failedSearch += v;
+-	cout << "Search Failed: " << failedSearch << endl;
+-    }
++    elapsed = (end.tv_sec - start.tv_sec)*1000000000 + (end.tv_nsec - start.tv_nsec);
++    cout << elapsed/1000 << "\tusec\t" << (uint64_t)(1000000*(numData/(elapsed/1000.0))) << "\tOps/sec" << endl;
+ #endif
+ 
+     auto util = D_RW(HashTable)->Utilization();

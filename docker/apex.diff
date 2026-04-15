@@ -1,0 +1,392 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 24ad6bf..102e24a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -11,9 +11,13 @@ elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
+     set(CMAKE_CXX_FLAGS "-O3 -xHost")
+ else()
+     # clang and gcc
+-    set(CMAKE_CXX_FLAGS "-lnuma -lrt -lpthread -ldl -mrtm -msse4.1 -mavx2 -O3 -g -march=native")
++    set(CMAKE_CXX_FLAGS "-lnuma -lrt -lpthread -ldl -mrtm -msse4.1 -mavx2 -O0 -g -march=native")
+ endif()
+ 
++
++set(THREADS_PREFER_PTHREAD_FLAG ON)
++find_package(Threads REQUIRED)
++
+ add_definitions(-DPMEM)
+ add_definitions(-DPMDK)
+ message(STATUS "Persistence support: PMDK")
+@@ -52,9 +56,10 @@ if (NOT epoch_reclaimer_POPULATED)
+ endif ()
+ 
+ include_directories(src/core)
+-list(APPEND libs_to_link pmemobj pmem tbb papi tcmalloc_minimal)
++list(APPEND libs_to_link pmemobj pmem tbb Threads::Threads)
++
+ 
+-add_executable(benchmark src/benchmark/main.cpp)            
++add_executable(benchmark src/benchmark/workload.cpp)            
+ add_dependencies(benchmark PMDK)
+ target_link_libraries(benchmark PRIVATE ${libs_to_link})
+ 
+diff --git a/src/benchmark/workload.cpp b/src/benchmark/workload.cpp
+new file mode 100644
+index 0000000..8f7a4c0
+--- /dev/null
++++ b/src/benchmark/workload.cpp
+@@ -0,0 +1,204 @@
++#include "../core/apex.h"
++#include "../util/System.h"
++#include "../util/sosd_util.h"
++#include "operation.h"
++#include <sys/time.h>
++#include <iomanip>
++#include <string>
++#include <random>
++#include <future>
++#include <vector>
++#include "flags.h"
++#include "utils.h"
++
++#include <fstream>
++#include <iostream>
++#include <map>
++
++enum OperationType {
++		INSERT,
++		UPDATE,
++		GET,
++		DELETE,
++		RANGE,
++		PRINT
++};
++
++std::map<char, OperationType> operation_type_map = {
++		{'i', OperationType::INSERT},
++		{'u', OperationType::UPDATE},
++		{'s', OperationType::GET},
++		{'d', OperationType::DELETE},
++		{'r', OperationType::RANGE},
++		{'p', OperationType::PRINT}
++};
++
++struct Operation {
++		OperationType type;
++		uint64_t key;
++		uint64_t value;
++};
++
++struct Workload {
++		std::vector<Operation> ops;
++
++		Workload(char * filename) {
++				std::ifstream input(filename);
++
++				if(!input) {
++						std::cerr << "Error opening input file" << std::endl;
++						return;
++				}
++
++				char op_c = 'i';
++				uint64_t key = 0;
++				uint64_t value = 0;
++
++				while(!input.eof()) {
++						input >> op_c;
++						input.ignore(1);
++						if(op_c != 'p') {
++							input >> key;
++							input.ignore(1);
++						}
++						
++						if(input.eof())
++							break;
++						if(op_c == 'i' || op_c == 'u') {
++								input >> value;
++								input.ignore(1);
++						}
++
++						Operation op = {operation_type_map[op_c], key, value};
++						ops.push_back(op);
++				}
++		}
++};
++
++template<class T, class P>
++Tree<T, P>* generate_index(){
++  Tree<T, P> *index = nullptr;
++  auto start_time = std::chrono::high_resolution_clock::now();
++
++    bool recover = my_alloc::BasePMPool::Initialize(pool_name, pool_size);
++    auto index_ptr = reinterpret_cast<Tree<T, P> **>(my_alloc::BasePMPool::GetRoot(sizeof(Tree<T, P>*)));
++    if (recover)
++    {
++      index = reinterpret_cast<Tree<T, P>*>(reinterpret_cast<char*>(*index_ptr) + 48);
++      new (index) alex::Apex<T, P>(recover);
++    }else{ 
++      my_alloc::BasePMPool::ZAllocate(reinterpret_cast<void**>(index_ptr), sizeof(alex::Apex<T, P>) + 64);
++      index = reinterpret_cast<Tree<T, P>*>(reinterpret_cast<char*>(*index_ptr) + 48);     
++      new (index) alex::Apex<T, P>();
++    }
++  
++  auto end_time = std::chrono::high_resolution_clock::now();
++  double consume_time = std::chrono::duration_cast<std::chrono::nanoseconds>(end_time -
++                                                          start_time)
++          .count();
++  std::cout << "Recover/Initialize time (ms) = " << consume_time / (1e6) << std::endl;
++  return index;
++}
++
++
++
++int main(int argc, char **argv) {
++	// Parsing arguments
++	int numData = 0;
++	int n_threads = 1;
++	char *input_path = (char *)std::string("../sample_input.txt").data();
++	char *persistent_path;
++	char *keys_file_path;
++	int c;	
++	while ((c = getopt(argc, argv, "n:w:t:i:p:k:")) != -1) {
++		switch (c) {
++		case 't':
++			n_threads = atoi(optarg);
++			break;
++		case 'i':
++			input_path = optarg;
++			break;
++		case 'p':
++			persistent_path = optarg;
++			break;
++		case 'k':
++			keys_file_path = optarg;
++			std::cerr << keys_file_path << std::endl;
++			break;
++		default:
++			break;
++		}
++	}
++
++	uint64_t* keys = new uint64_t[100000];
++
++	load_binary_data(keys, 100000, keys_file_path);
++
++	auto values = new std::pair<uint64_t, uint64_t>[100000];
++	for (int i = 0; i < 100000; i++) {
++	    values[i].first = keys[i];
++	    values[i].second = reinterpret_cast<uint64_t>(&keys[i]);
++	}
++	std::sort(values, values + 100000,
++            [](auto const& a, auto const& b) { return a.first < b.first; });
++
++	struct timespec start, end, tmp;
++
++  	Tree<uint64_t, uint64_t> *index = generate_index<uint64_t, uint64_t>();
++	index->bulk_load(values, 100000);
++
++	Workload workload(input_path);
++	numData = workload.ops.size();
++	std::cerr << "Workload: " << numData << " ops" << std::endl;
++
++	// Multithreading
++	std::vector<std::future<void>> futures(n_threads);
++
++	long data_per_thread = numData / n_threads;
++
++	for (int tid = 0; tid < n_threads; tid++) {
++		int from = data_per_thread * tid;
++		int to = (tid == n_threads - 1) ? numData : from + data_per_thread;
++
++		auto f = std::async(std::launch::async,
++			 [&index, &workload](int from, int to) {
++				  Tree<uint64_t, uint64_t>::V * s = new Tree<uint64_t, uint64_t>::V[1000];
++				 for (int i = from; i < to; ++i) {
++					 Operation & op = workload.ops[i];
++					 uint64_t x;
++
++					 switch(op.type) {
++						case OperationType::INSERT:
++							index->insert(op.key, op.value);
++							break;
++
++						case OperationType::UPDATE:
++							index->update(op.key, op.value);
++							break;
++
++						case OperationType::GET:
++							index->search(op.key, &x);
++							break;
++
++						case OperationType::DELETE:
++							index->erase(op.key);
++							break;
++						case OperationType::RANGE:
++							index->range_scan_by_size(op.key, std::min((uint64_t)1000, op.value), s);
++							break;
++						case OperationType::PRINT:
++							break;
++						}	 
++				 }
++				 delete s;
++			 },
++			 from, to);
++		futures.push_back(std::move(f));
++	}
++
++	for (auto &&f : futures)
++		if (f.valid())
++			f.get();
++
++	return 0;			
++}
+diff --git a/src/core/apex_nodes.h b/src/core/apex_nodes.h
+index 2f1acd6..6c335eb 100644
+--- a/src/core/apex_nodes.h
++++ b/src/core/apex_nodes.h
+@@ -153,7 +153,7 @@ class AlexModelNode : public AlexNode<T, P> {
+     uint32_t old_value = v & lockMask;
+     uint32_t new_value = old_value | lockSet;
+ 
+-    while (!CAS(&lock_, &old_value, new_value)) {
++    while (!apex_trylock_wrapper(&lock_, &old_value, new_value)) {
+       if ((old_value & lockSet) ||  this->is_obsolete_)
+       {
+         return false;
+@@ -179,7 +179,7 @@ class AlexModelNode : public AlexNode<T, P> {
+ 
+     uint32_t old_value = v & lockMask;
+     uint32_t new_value = old_value | lockSet;
+-    while (!CAS(&lock_, &old_value, new_value)) {
++    while (!apex_trylock_wrapper(&lock_, &old_value, new_value)) {
+       if ((old_value & lockSet) ||  this->is_obsolete_)
+       {
+         return false;
+@@ -203,7 +203,7 @@ class AlexModelNode : public AlexNode<T, P> {
+     uint32_t old_value = v & lockMask;
+     uint32_t new_value = old_value | lockSet;
+ 
+-    if (!CAS(&lock_, &old_value, new_value)) {
++    if (!apex_trylock_wrapper(&lock_, &old_value, new_value)) {
+       return false;
+     }
+ 
+@@ -227,7 +227,7 @@ class AlexModelNode : public AlexNode<T, P> {
+ 
+     uint32_t old_value = v & lockMask;
+     auto new_value = ((v & lockMask) + 1) & lockMask; 
+-    while (!CAS(&lock_, &old_value, new_value)){
++    while (!apex_read_trylock_wrapper(&lock_, &old_value, new_value)){
+       if((old_value & lockSet) || this->is_obsolete_){
+         return false;
+       }
+@@ -243,11 +243,11 @@ class AlexModelNode : public AlexNode<T, P> {
+     if((v & lockSet) || this->is_obsolete_) return false;
+     uint32_t old_value = v & lockMask;
+     auto new_value = ((v & lockMask) + 1) & lockMask;
+-    return CAS(&lock_, &old_value, new_value);
++    return apex_read_trylock_wrapper(&lock_, &old_value, new_value);
+   }
+ 
+   inline void release_read_lock(){
+-    SUB(&lock_, 1);
++    apex_read_release_wrapper(&lock_);
+   }
+ 
+   inline void reset_rw_lock(){ 
+@@ -257,7 +257,7 @@ class AlexModelNode : public AlexNode<T, P> {
+   }
+ 
+   inline void release_write_lock(){
+-    __atomic_store_n(&lock_, 0, __ATOMIC_RELEASE);
++    apex_release_wrapper(&lock_, 0);
+   }
+ 
+   void display_all_child(){ 
+@@ -763,7 +763,7 @@ class AlexDataNode : public AlexNode<T, P> {
+         }
+       }
+       new_value = old_value | lockSet;
+-    } while (!CAS(&lock_, &old_value, new_value));
++    } while (!apex_trylock_wrapper(&lock_, &old_value, new_value));
+   }
+ 
+   inline bool try_get_lock() {
+@@ -773,12 +773,12 @@ class AlexDataNode : public AlexNode<T, P> {
+     }
+     auto old_value = v & lockMask;
+     auto new_value = v | lockSet;
+-    return CAS(&lock_, &old_value, new_value);
++    return apex_trylock_wrapper(&lock_, &old_value, new_value);
+   }
+ 
+   inline void release_lock() {
+     uint32_t v = lock_;
+-    __atomic_store_n(&lock_, v + 1 - lockSet, __ATOMIC_RELEASE);
++    apex_release_wrapper(&lock_, v + 1 - lockSet);
+   }
+ 
+   inline void get_link_lock(){
+@@ -793,7 +793,7 @@ class AlexDataNode : public AlexNode<T, P> {
+         }
+       }
+       new_value = old_value | lockSet;
+-    } while (!CAS(&link_lock_, &old_value, new_value));
++    } while (!apex_trylock_wrapper(&link_lock_, &old_value, new_value));
+   }
+ 
+   inline bool try_get_link_lock(){
+@@ -802,7 +802,7 @@ class AlexDataNode : public AlexNode<T, P> {
+     if(old_value & lockSet) return false;
+     old_value &= lockMask;
+     new_value = old_value | lockSet;
+-    return CAS(&link_lock_, &old_value, new_value);
++    return apex_trylock_wrapper(&link_lock_, &old_value, new_value);
+   }
+ 
+   inline void release_link_lock() {
+@@ -846,7 +846,7 @@ class AlexDataNode : public AlexNode<T, P> {
+       }
+       new_value = old_value | lockSet;
+     } 
+-    while (!CAS(&scale_parameters_[lock_pos].lock_, &old_value, new_value));
++    while (!apex_trylock_wrapper((uint32_t*)&scale_parameters_[lock_pos].lock_, &old_value, new_value));
+   }
+ 
+   inline bool try_get_lock(int lock_pos) {
+@@ -856,7 +856,7 @@ class AlexDataNode : public AlexNode<T, P> {
+     }
+     auto old_value = v & lockMask;
+     auto new_value = v | lockSet;
+-    return CAS(&scale_parameters_[lock_pos].lock_, &old_value, new_value);
++    return apex_trylock_wrapper((uint32_t*)&scale_parameters_[lock_pos].lock_, &old_value, new_value);
+   }
+ 
+   inline void release_lock(int lock_pos) {
+diff --git a/src/util/utils.h b/src/util/utils.h
+index 59c4f45..174a2d9 100644
+--- a/src/util/utils.h
++++ b/src/util/utils.h
+@@ -158,4 +158,20 @@ void clwbmore(void *start, void *end)
+  */
+ static inline
+ void sfence(void)
+-{ asm volatile("sfence"); }
+\ No newline at end of file
++{ asm volatile("sfence"); }
++
++
++static bool apex_trylock_wrapper(uint32_t * lock, uint32_t * old_value, uint32_t new_value) {
++  return CAS(lock, old_value, new_value);
++}
++
++static bool apex_read_trylock_wrapper(uint32_t * lock, uint32_t * old_value, uint32_t new_value) {
++  return CAS(lock, old_value, new_value);
++}
++
++static void apex_release_wrapper(uint32_t * lock, uint32_t val) {
++  __atomic_store_n(lock, val, __ATOMIC_RELEASE);
++}
++static void apex_read_release_wrapper(uint32_t * lock) {
++  SUB(lock, 1);
++}

@@ -1,4 +1,4 @@
-# Mumak: Efficient and Black-Box Bug Detection for Persistent Memory
+# Practical Bug Detection for Persistent Memory Systems
 
 João Gonçalves, Miguel Matos, and Rodrigo Rodrigues. 2023.
 Mumak: Efficient and Black-Box Bug Detection for Persistent Memory.
@@ -6,114 +6,65 @@ In Eighteenth European Conference on Computer Systems (EuroSys ’23),
 May 8–12, 2023, Rome, Italy. ACM, New York, NY, USA, 17 pages.
 https://doi.org/10.1145/3552326.3587447
 
-[![DOI](https://zenodo.org/badge/595640078.svg)](https://zenodo.org/badge/latestdoi/595640078)
-
-## Artifact evaluation
-
-The [Artifact Evaluation folder](artifact-evaluation) contains all the necessary instructions and scripts used to reproduce the results and the figures from the original paper.
-
+João Gonçalves, José Fragoso Santos, Rodrigo Rodrigues, and Miguel Matos. 2026.
+Vardalith: Hybrid Detection of Persistent Memory Concurrency Bugs.
+To appear in ECOOP'26.
 
 ## Installation
 
-Clone the repository:
-```
-git clone https://github.com/task3r/mumak.git
-cd mumak && git submodule update --init
-```
-Make sure to disable address space randomization, as the analysis depends on it:
-```
-echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
-```
-Additionally, you should also configure the coredump naming convention to obtain better debugging information:
-```
-echo '/tmp/core-%e.%p.%h.%t' | sudo tee /proc/sys/kernel/core_pattern
-```
-These last two steps can be automated by running:
-```
-./scripts/setup_host.sh
-```
-
-We provide containers with all the required dependencies. The [Mumak base dockerfile](Dockerfile) offers build arguments to control the PMDK version and base operating system used (helpful when combining with target applications with specific dependencies). Here are some example builds:
+We provide containers with all the required dependencies. The [base dockerfile](Dockerfile) offers build arguments to control the PMDK version and base operating system used (helpful when combining with target applications with specific dependencies). Here are some example builds:
 ```
 docker build -t mumak:1.6 . --build-arg PMDK_VERSION=tags/1.6
 docker build -t mumak:1.8 . --build-arg PMDK_VERSION=tags/1.8
 docker build -t mumak:1.12.1-ubuntu20 . --build-arg PMDK_VERSION=tags/1.12.1 --build-arg BASE_OS=ubuntu:20.04
 ```
-To guarantee the freshest PMDK version when rebuilding Mumak, either pass `--no-cache` (very time consuming)
-or `--build-arg REFRESH="$(date)"` (uses cache for all dependencies, rebuilds PMDK and Mumak from scratch).
+To guarantee the freshest PMDK version when rebuilding the container, either pass `--no-cache` (very time consuming)
+or `--build-arg REFRESH="$(date)"` (uses cache for all dependencies, rebuilds from scratch).
 ```
 sudo docker build -t mumak:master --build-arg PMDK_VERSION=master --build-arg BASE_OS=ubuntu:18.04 --build-arg REFRESH="$(date)"
 ```
 
-When running the Mumak container, make sure to mount the PM filesystem, as well as the auxiliary tmpfs:
+When running the container, make sure to mount the PM filesystem, as well as the auxiliary tmpfs:
 ```
 docker run -it -v /mnt/pmem0:/mnt/pmem0 -v /mnt/ramdisk:/mnt/ramdisk mumak:version
 ```
 
-If you want to build Mumak from scratch, make sure you have gcc, g++ and make installed. In addition to this:
+If you want to build Mumak & Vardalith from scratch, make sure you have rust, cargo, gcc, g++ and make installed. In addition to this:
 1. Download and uncompress [PIN](http://software.intel.com/sites/landingpage/pintool/downloads/pin-3.21-98484-ge7cd811fd-gcc-linux.tar.gz).
 2. Set `PIN_ROOT` and add it to `PATH`:
 ```
 export PIN_ROOT=/path/to/pin
 export PATH=$PATH:$PIN_ROOT
 ```
-3. Compile the instrumentation tools inside the [instrumentation/src](instrumentation/src/) folder:
+3. Compile the tools inside the [src/](src/) folder:
 ```
-cd instrumentation/src
+cd src
 make
 ```
 
-## Run Mumak
+## Usage Guides
 
-The [mumak](mumak) script acts as a frontend for our tool. Pass `-h` to get instructions on how to run it:
-```
-Usage: mumak -x target [-X target_recovery] [-c client] [-C client_recovery]
-       [-k target_termination] [-t vanilla,bfi,onta,dofta,ndofta,coverage]
-       [-i all,clflush,clflushopt,clwb,movnt,sfence,store] [-o dir]
-       [-m pm_mount] [-d ramdisk] [-F fp] [-a size] [-f file] [-v]
-Efficient and blackbox detection of crash-consistency bugs in
-Persistent Memory programs.
+- [Mumak Usage Guide](MUMAK.md)
+- [Vardalith Usage Guide](src/vardalith/USAGE.md)
 
-  -x cmd       Target execution.
-  -X cmd       Recovery execution. Only required for using fault-injection tools.
-  -c cmd       Client invocation (used for client-server applications).
-  -C cmd       Client recovery invocation (used for client-server applications).
-  -k cmd       Explicit target termination.
-  -t t1,t2,... Mumak tools to use during analysis separated by ','.
-               Defaults to all.
-  -i inst      Instruction to fail (all, clwb, clflush, clflushopt, sfence, movnt)
-               Defaults to all.
-  -o dir       Output directory for the results (created if it does not exist).
-               Defaults to local folder (.).
-  -m path      PM mount path, used only to collect PM usage.
-               Defaults to /mnt/pmem0.
-  -d path      RAM disk mount path, used for trace analysis tools.
-               Defaults to /mnt/ramdisk.
-  -s period    Sleep period (in seconds) between server and client invocations.
-               Defaults to 1.
-  -T period    Recovery timeout period (in seconds).
-               Defaults to 5.
-  -I period    Max fault injection period (in seconds).
-               Defaults to 60.
-  -F fp        Index of specific failure point to target.
-  -a size      Allocation for failure point tree (in bytes).
-               Defaults to 32768.
-  -f file      Set options through a configuration file.
-  -v           Increased verbosity.
-               Defaults to false.
-  -h           Display this help message.
 
-Example:
-mumak -o output -v -t bfi,dofta -x "./target args" -X "./target recovery"
-```
+## EuroSys'23 Artifact Evaluation
+
+[Mumak's Artifact Evaluation folder](mumak-artifact-evaluation) contains all the necessary instructions and scripts used to reproduce the results and the figures from the original paper.
+
+[![DOI](https://zenodo.org/badge/595640078.svg)](https://zenodo.org/badge/latestdoi/595640078)
+
 ## Code structure
 
-* [instrumentation/src](instrumentation/src) contains the core of Mumak, with a file for each PIN tool implemented and some utilities.
+* [src/instrumentation](src/instrumentation) contains various instrumentation tools implemented using PIN and some utilities, used both by Mumak and Vardalith.
+* [src/analysis](src/analysis) contains Vardalith's static analysis.
+* [src/patching](src/patching) contains Vardalith's patching scripts.
+* [src/runtime](src/runtime) contains Vardalith's PIFR monitoring race detection runtime.
+* [src/vardalith](src/vardalith) contains Vardalith's cli.
 * [docker](docker) contains auxiliary docker configurations for targets and other state-of-the-art bug detection tools
 * [mumak](mumak) is a script that acts as a frontend to our tool
 * [configs](configs) contains pre-defined configuration files to analyze different targets using the frontend script
 * [scripts](scripts) contains some auxiliary scripts
-* [artifact-evaluation](artifact-evaluation) contains instructions to reproduce the results presented in the original paper
 
 ## Additional help
 ### How to configure Intel Optane DCPMM
@@ -145,7 +96,7 @@ sudo mount -o dax /dev/pmem0 /mnt/pmem0
 sudo chmod -R 777 /mnt/pmem0
 ```
 
-Note that Mumak uses an additional tmpfs mount to store temporary data. Create it as follows:
+Note that these tools uses an additional tmpfs mount to store temporary data. Create it as follows:
 ```
 sudo mkdir /mnt/ramdisk
 sudo mount -t tmpfs -o rw,size=50G tmpfs /mnt/ramdisk

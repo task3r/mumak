@@ -1,0 +1,50 @@
+# Example configuration file for Vardalith
+# This demonstrates experiment parameter inheritance and overrides
+
+[base]
+# Required: Path to the binary to execute
+binary = "pm_program"
+
+# Optional: Arguments to pass to the binary
+args = ["-threads", "8", "-workload", "1000", "-pm", "/mnt/pmem0/test"]
+
+# Optional: Timeout in seconds
+timeout_seconds = 60
+
+# Optional: PMEM mount configuration
+pmem_mount = "/mnt/pmem0"
+pmem_dont_clean = true
+
+# Optional: Environment variables to set
+[base.environment]
+DEBUG = "1"
+
+[run]
+# Default experiment configuration that all experiments inherit from
+# Experiments can override any of these values
+report_type = "minimal"
+minimal_regions = false
+delay = 0
+decay = 0
+threads = 8
+profiling = false
+tracing = false
+timeout_seconds = 300
+
+# Experiment 1: Uses all defaults from [run] section
+[[run.experiments]]
+workload = 1000
+
+# Experiment 2: Overrides some parameters
+[[run.experiments]]
+workload = 10000
+report_type = "full" # Override: full reporting instead of minimal
+profiling = true     # Override: enable profiling for this test
+
+# Experiment 3: Different overrides
+[[run.experiments]]
+workload = 100000
+sampling = 10           # Override: minimal sampling
+minimal_regions = true  # Override: enable minimal regions
+delay = 0               # Override: no delay
+tracing = true          # Override: enable tracing

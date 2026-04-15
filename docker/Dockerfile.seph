@@ -1,0 +1,32 @@
+ARG BASE="mumak:1.12.1-ubuntu22"
+FROM ${BASE}
+
+COPY workloads /workloads
+
+RUN apt install -y meson libfmt-dev libpmemobj-cpp-dev
+WORKDIR /root
+RUN git clone https://github.com/cuhk-mass/SEPH 
+RUN git clone https://github.com/jarro2783/cxxopts
+
+RUN cp cxxopts/include/cxxopts.hpp /usr/include
+
+WORKDIR /root/SEPH
+COPY docker/seph.patch .
+RUN git apply seph.patch
+RUN meson builddir --buildtype debug \
+		-DPMHB_LATENCY=false \
+		-DINSERT_DEBUG=false \
+		-DCOUNTING_WRITE=false \
+		-DLOAD_FACTOR=false \
+		-DPREFAULT=true \
+		-DBREAKDOWN_SOD=true \
+		-DBREAKDOWN_SO=false \
+		-DBREAKDOWN_S=false \
+		-DBREAKDOWN_BASE=false 
+RUN meson compile -C builddir -j $(nproc)
+
+WORKDIR /root/SEPH/scripts/PM_TRACE
+RUN meson builddir && meson compile -C builddir
+
+
+WORKDIR /scripts

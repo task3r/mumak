@@ -1,0 +1,10 @@
+ARG BASE="mumak:1.12.1"
+FROM ${BASE}
+
+RUN apt install -y libgflags-dev
+WORKDIR /root
+RUN git clone https://github.com/baotonglu/dash
+WORKDIR /root/dash/build
+RUN cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_PMEM=ON .. && make -j
+
+WORKDIR /scripts

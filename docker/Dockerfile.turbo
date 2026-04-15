@@ -1,0 +1,18 @@
+ARG BASE="vardalith"
+FROM ${BASE}
+
+RUN apt install -y libjemalloc-dev
+WORKDIR /root
+RUN git clone https://github.com/pmem/vmem
+RUN git clone https://github.com/hansonzhao007/TurboHash
+
+WORKDIR /root/vmem
+RUN make && make install
+WORKDIR /root/TurboHash
+RUN git submodule update --init --recursive
+COPY turbo.patch .
+RUN git apply --ignore-space-change --ignore-whitespace turbo.patch
+WORKDIR /root/TurboHash/build
+RUN cmake -DCMAKE_BUILD_TYPE=Debug .. && make -j$(nproc)
+
+WORKDIR /scripts

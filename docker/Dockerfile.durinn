@@ -1,0 +1,32 @@
+ARG BASE="vardalith"
+FROM ${BASE}
+
+RUN apt install -y libjemalloc-dev libtbb-dev libboost-all-dev
+
+WORKDIR /root
+RUN git clone https://github.com/cosmoss-jigu/durinn
+
+WORKDIR /root/durinn
+COPY durinn.patch .
+RUN git apply durinn.patch
+
+WORKDIR /root/durinn/third_party/RECIPE/P-HOT
+RUN mkdir build
+
+WORKDIR /root/durinn/third_party/RECIPE/P-HOT/build
+RUN cmake -DCMAKE_BUILD_TYPE=Debug ..
+RUN make -j 
+
+WORKDIR /root/durinn/third_party/RECIPE/P-ART
+RUN mkdir build
+
+WORKDIR /root/durinn/third_party/RECIPE/P-ART/build
+RUN cmake -DCMAKE_BUILD_TYPE=Debug ..
+RUN make -j 
+
+WORKDIR /root/durinn/third_party/RECIPE/P-Masstree
+RUN mkdir build
+
+WORKDIR /root/durinn/third_party/RECIPE/P-Masstree/build
+RUN cmake -DCMAKE_BUILD_TYPE=Debug ..
+RUN make -j 

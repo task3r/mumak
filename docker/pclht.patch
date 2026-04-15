@@ -1,0 +1,431 @@
+diff --git a/P-CLHT/example.cpp b/P-CLHT/example.cpp
+index 90089c0..7a40e29 100644
+--- a/P-CLHT/example.cpp
++++ b/P-CLHT/example.cpp
+@@ -4,6 +4,8 @@
+ #include <vector>
+ #include <thread>
+ #include <atomic>
++#include <fstream>
++#include <map>
+ #include "tbb/tbb.h"
+ 
+ using namespace std;
+@@ -11,142 +13,150 @@ using namespace std;
+ #include "clht_lb_res.h"
+ #include "ssmem.h"
+ 
+-typedef struct thread_data {
+-    uint32_t id;
+-    clht_t *ht;
+-} thread_data_t;
+-
+-typedef struct barrier {
+-    pthread_cond_t complete;
+-    pthread_mutex_t mutex;
+-    int count;
+-    int crossing;
+-} barrier_t;
+-
+-void barrier_init(barrier_t *b, int n) {
+-    pthread_cond_init(&b->complete, NULL);
+-    pthread_mutex_init(&b->mutex, NULL);
+-    b->count = n;
+-    b->crossing = 0;
+-}
+-
+-void barrier_cross(barrier_t *b) {
+-    pthread_mutex_lock(&b->mutex);
+-    b->crossing++;
+-    if (b->crossing < b->count) {
+-        pthread_cond_wait(&b->complete, &b->mutex);
+-    } else {
+-        pthread_cond_broadcast(&b->complete);
+-        b->crossing = 0;
+-    }
+-    pthread_mutex_unlock(&b->mutex);
+-}
+ 
+-barrier_t barrier;
+-
+-void run(char **argv) {
+-    std::cout << "Simple Example of P-CLHT" << std::endl;
+-
+-    uint64_t n = std::atoll(argv[1]);
+-    uint64_t *keys = new uint64_t[n];
++enum OperationType {
++    INSERT,
++    UPDATE,
++    GET,
++    DELETE,
++    RANGE,
++    PRINT
++};
++
++std::map<char, OperationType> operation_type_map = {
++    {'i', OperationType::INSERT},
++    {'u', OperationType::UPDATE},
++    {'s', OperationType::GET},
++    {'d', OperationType::DELETE},
++    {'r', OperationType::RANGE},
++    {'p', OperationType::PRINT}
++};
++
++struct Operation {
++    OperationType type;
++    uint64_t key;
++    uint64_t value;
++};
++
++struct Workload {
++    std::vector<Operation> ops;
++
++    Workload(char * filename) {
++        std::ifstream input(filename);
++
++        if(!input) {
++            std::cerr << "Error opening input file" << std::endl;
++            return;
++        }
++
++        char op_c = 'i';
++        uint64_t key = 0;
++        uint64_t value = 0;
++
++        while(!input.eof()) {
++            input >> op_c;
++            input.ignore(1);
++            if(op_c != 'p') {
++              input >> key;
++              input.ignore(1);
++            }
++            
++              if(input.eof())
++                  break;
++            if(op_c == 'i' || op_c == 'u') {
++                input >> value;
++                input.ignore(1);
++            }
+ 
+-    // Generate keys
+-    for (uint64_t i = 0; i < n; i++) {
+-        keys[i] = i + 1;
++            Operation op = {operation_type_map[op_c], key, value};
++            ops.push_back(op);
++        }
++    }
++};
++
++
++void run(char **argv, int argc) {
++    int numData = 0;
++    int n_threads = 1;
++    char *input_path = NULL;
++    char *persistent_path;
++
++    int c;
++    while ((c = getopt(argc, argv, "n:w:t:i:p:")) != -1) {
++        switch (c) {
++        case 't':
++            n_threads = atoi(optarg);
++            break;
++        case 'i':
++            input_path = optarg;
++            break;
++        case 'p':
++            persistent_path = optarg;
++            break;
++        default:
++            break;
++        }
+     }
+ 
+-    int num_thread = atoi(argv[2]);
++    clht_t *hashtable = clht_create(512, persistent_path);
++    
++    if(input_path == NULL) {
++        std::cerr << "No input path provided" << std::endl;
++        return;
++    }
+ 
+-    printf("operation,n,ops/s\n");
++    Workload workload(input_path);
+ 
+-    clht_t *hashtable = clht_create(512);
++    numData = workload.ops.size();
+ 
+-    barrier_init(&barrier, num_thread);
++    std::cerr << "Workload: " << numData << " ops" << std::endl;
+ 
+-    thread_data_t *tds = (thread_data_t *) malloc(num_thread * sizeof(thread_data_t));
+ 
+     std::atomic<int> next_thread_id;
+ 
+     {
+-        // Load
+-        auto starttime = std::chrono::system_clock::now();
++        // Run
+         next_thread_id.store(0);
+         auto func = [&]() {
+             int thread_id = next_thread_id.fetch_add(1);
+-            tds[thread_id].id = thread_id;
+-            tds[thread_id].ht = hashtable;
+ 
+-            uint64_t start_key = n / num_thread * (uint64_t)thread_id;
+-            uint64_t end_key = start_key + n / num_thread;
++            clht_gc_thread_init(hashtable, thread_id);
+ 
+-            clht_gc_thread_init(tds[thread_id].ht, tds[thread_id].id);
+-            barrier_cross(&barrier);
++            for (int i = thread_id; i < numData; i+= n_threads) {
++                Operation & op = workload.ops[i];
+ 
+-            for (uint64_t i = start_key; i < end_key; i++) {
+-                clht_put(tds[thread_id].ht, keys[i], keys[i]);
+-            }
+-        };
++                switch(op.type) {
++                case OperationType::INSERT:
++                    clht_put(hashtable, op.key, op.value);
++		    break;
+ 
+-        std::vector<std::thread> thread_group;
++		case OperationType::UPDATE:
++                    clht_update(hashtable, op.key, op.value);
++                    break;
+ 
+-        for (int i = 0; i < num_thread; i++)
+-            thread_group.push_back(std::thread{func});
++                case OperationType::GET:
++                    clht_get(hashtable, op.key);
++                    break;
+ 
+-        for (int i = 0; i < num_thread; i++)
+-            thread_group[i].join();
+-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+-                std::chrono::system_clock::now() - starttime);
+-        printf("Throughput: load, %f ,ops/us\n", (n * 1.0) / duration.count());
+-    }
+-
+-    barrier.crossing = 0;
+-
+-    {
+-        // Run
+-        auto starttime = std::chrono::system_clock::now();
+-        next_thread_id.store(0);
+-        auto func = [&]() {
+-            int thread_id = next_thread_id.fetch_add(1);
+-            tds[thread_id].id = thread_id;
+-            tds[thread_id].ht = hashtable;
+-
+-            uint64_t start_key = n / num_thread * (uint64_t)thread_id;
+-            uint64_t end_key = start_key + n / num_thread;
+-
+-            clht_gc_thread_init(tds[thread_id].ht, tds[thread_id].id);
+-            barrier_cross(&barrier);
+-
+-            for (uint64_t i = start_key; i < end_key; i++) {
+-                    uintptr_t val = clht_get(tds[thread_id].ht, keys[i]);
+-                    if (val != keys[i]) {
+-                        std::cout << "[CLHT] wrong key read: " << val << "expected: " << keys[i] << std::endl;
+-                        exit(1);
+-                    }
++                case OperationType::DELETE:
++                    clht_remove(hashtable, op.key);
++                    break;
++                }                
+             }
+         };
+ 
+         std::vector<std::thread> thread_group;
+ 
+-        for (int i = 0; i < num_thread; i++)
++        for (int i = 0; i < n_threads; i++)
+             thread_group.push_back(std::thread{func});
+ 
+-        for (int i = 0; i < num_thread; i++)
++        for (int i = 0; i < n_threads; i++)
+             thread_group[i].join();
+-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
+-                std::chrono::system_clock::now() - starttime);
+-        printf("Throughput: run, %f ,ops/us\n", (n * 1.0) / duration.count());
+     }
+     clht_gc_destroy(hashtable);
+-
+-    delete[] keys;
+ }
+ 
+ int main(int argc, char **argv) {
+-    if (argc != 3) {
+-        printf("usage: %s [n] [nthreads]\nn: number of keys (integer)\nnthreads: number of threads (integer)\n", argv[0]);
+-        return 1;
+-    }
+-
+-    run(argv);
++    run(argv, argc);
+     return 0;
+-}
+\ No newline at end of file
++}
+diff --git a/P-CLHT/external/ssmem/src/ssmem.c b/P-CLHT/external/ssmem/src/ssmem.c
+index 7378df4..88ac894 100644
+--- a/P-CLHT/external/ssmem/src/ssmem.c
++++ b/P-CLHT/external/ssmem/src/ssmem.c
+@@ -166,7 +166,7 @@ ssmem_list_node_new(void* mem, ssmem_list_t* next)
+ /* 
+  *
+  */
+-inline ssmem_released_t*
++static inline ssmem_released_t*
+ ssmem_released_node_new(void* mem, ssmem_released_t* next)
+ {
+   ssmem_released_t* rel;
+diff --git a/P-CLHT/include/clht_lb_res.h b/P-CLHT/include/clht_lb_res.h
+index 13df699..45c3f2b 100644
+--- a/P-CLHT/include/clht_lb_res.h
++++ b/P-CLHT/include/clht_lb_res.h
+@@ -54,7 +54,7 @@ extern __thread ssmem_allocator_t* clht_alloc;
+ /* #define DEBUG */
+ 
+ #define CLHT_READ_ONLY_FAIL   1
+-#define CLHT_HELP_RESIZE      1
++//#define CLHT_HELP_RESIZE      1
+ #define CLHT_PERC_EXPANSIONS  1
+ #define CLHT_MAX_EXPANSIONS   24
+ #define CLHT_PERC_FULL_DOUBLE 50	   /* % */
+@@ -278,20 +278,26 @@ _mm_pause_rep(uint64_t w)
+ #  define LOCK_ACQ(lock, ht)			\
+   lock_acq_chk_resize(lock, ht)
+ 
++void lock_rel(clht_lock_t* lock);
++
+ #  define LOCK_RLS(lock)			\
+-  TAS_RLS_MFENCE();				\
+- *lock = 0;	  
++  lock_rel(lock)
++
+ 
+ #endif	/* RTM */
+ 
+ #define LOCK_ACQ_RES(lock)			\
+   lock_acq_resize(lock)
+ 
++uint8_t trylock_acq(clht_lock_t* lock);
++
+ #define TRYLOCK_ACQ(lock)			\
+-  TAS_U8(lock)
++  trylock_acq(lock)
++
++void trylock_rel(clht_lock_t* lock);
+ 
+ #define TRYLOCK_RLS(lock)			\
+-  lock = LOCK_FREE
++  trylock_rel(&lock)
+ 
+ void ht_resize_help(clht_hashtable_t* h);
+ 
+@@ -407,7 +413,7 @@ lock_acq_rtm_chk_resize(clht_lock_t* lock, clht_hashtable_t* h)
+ 
+ /* Create a new hashtable. */
+ clht_hashtable_t* clht_hashtable_create(uint64_t num_buckets);
+-clht_t* clht_create(uint64_t num_buckets);
++clht_t* clht_create(uint64_t num_buckets, char*);
+ 
+ /* Insert a key-value pair into a hashtable. */
+ int clht_put(clht_t* h, clht_addr_t key, clht_val_t val);
+@@ -458,10 +464,10 @@ POBJ_LAYOUT_TOID(clht, bucket_t);
+ POBJ_LAYOUT_END(clht);
+ 
+ // Global pool uuid
+-uint64_t pool_uuid;
++extern uint64_t pool_uuid;
+ 
+ // Global pool pointer
+-PMEMobjpool *pop;
++extern PMEMobjpool *pop;
+ 
+ // pmemobj header size (presume using default compact header)
+ #define POBJ_HEADER_SIZE        16
+diff --git a/P-CLHT/src/clht_lb_res.c b/P-CLHT/src/clht_lb_res.c
+index 7411f12..dcaf575 100644
+--- a/P-CLHT/src/clht_lb_res.c
++++ b/P-CLHT/src/clht_lb_res.c
+@@ -42,6 +42,10 @@
+ 
+ __thread ssmem_allocator_t* clht_alloc;
+ 
++
++uint64_t pool_uuid;
++PMEMobjpool *pop;
++
+ #ifdef DEBUG
+ __thread uint32_t put_num_restarts = 0;
+ __thread uint32_t put_num_failed_expand = 0;
+@@ -219,7 +223,7 @@ clht_bucket_create_stats(clht_hashtable_t* h, int* resize)
+ clht_hashtable_t* clht_hashtable_create(uint64_t num_buckets);
+ 
+     clht_t* 
+-clht_create(uint64_t num_buckets)
++clht_create(uint64_t num_buckets, char * pmem_path)
+ {
+     // Enable prefault
+     int arg_open = 1, arg_create = 1;
+@@ -229,11 +233,11 @@ clht_create(uint64_t num_buckets)
+         perror("failed to configure prefaults at create\n");
+ 
+     // Open the PMEMpool if it exists, otherwise create it
+-    size_t pool_size = 32*1024*1024*1024UL;
+-    if (access("/dev/shm/pool", F_OK) != -1)
+-        pop = pmemobj_open("/dev/shm/pool", POBJ_LAYOUT_NAME(clht));
++    size_t pool_size = 1*1024*1024*1024UL;
++    if (access(pmem_path, F_OK) != -1)
++        pop = pmemobj_open(pmem_path, POBJ_LAYOUT_NAME(clht));
+     else
+-        pop = pmemobj_create("/dev/shm/pool", POBJ_LAYOUT_NAME(clht), pool_size, 0666);
++        pop = pmemobj_create(pmem_path, POBJ_LAYOUT_NAME(clht), pool_size, 0666);
+ 
+     if (pop == NULL)
+         perror("failed to open the pool\n");
+@@ -249,6 +253,7 @@ clht_create(uint64_t num_buckets)
+         return NULL;
+ 
+     if (w->ht_off == 0) {
++        fputs("clht_create", stderr);
+         clht_hashtable_t *ht_ptr;
+         ht_ptr = clht_hashtable_create(num_buckets);
+         assert(ht_ptr != NULL);
+@@ -266,6 +271,7 @@ clht_create(uint64_t num_buckets)
+         clflush((char *)ht_ptr, sizeof(clht_hashtable_t), false, true);
+         clflush((char *)w, sizeof(clht_t), false, true);
+     } else {
++        fputs("clht_open", stderr);
+         w->resize_lock = LOCK_FREE;
+         w->gc_lock = LOCK_FREE;
+         w->status_lock = LOCK_FREE;
+@@ -551,6 +557,8 @@ clht_update(clht_t* h, clht_addr_t key, clht_val_t val)
+     } 
+     while (unlikely(bucket != NULL));
+ 
++    LOCK_RLS(lock);
++    
+     return false;
+ }
+ 
+@@ -1025,3 +1033,17 @@ void clht_lock_initialization(clht_t *h)
+         }
+     }
+ }
++
++
++uint8_t trylock_acq(clht_lock_t* lock) {
++  return TAS_U8(lock);
++}
++
++void lock_rel(clht_lock_t* lock) {
++  TAS_RLS_MFENCE();       
++ *lock = 0;   
++}
++
++void trylock_rel(clht_lock_t* lock) {
++  *lock = LOCK_FREE;
++}

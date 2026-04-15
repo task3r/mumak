@@ -1,0 +1,203 @@
+diff --git a/buildall.sh b/buildall.sh
+index bf25604..f6bdffd 100644
+--- a/buildall.sh
++++ b/buildall.sh
+@@ -5,7 +5,7 @@ echo "-------- build Turbo ---------"
+ pwd
+ mkdir release
+ cd release
+-cmake ..
++cmake -DCMAKE_BUILD_TYPE=Debug ..
+ make -j32
+ cd ..
+ 
+@@ -34,4 +34,4 @@ pwd
+ mkdir release
+ cd release
+ cmake -DCMAKE_BUILD_TYPE=Release -DUSE_PMEM=ON .. 
+-make -j32
+\ No newline at end of file
++make -j32
+diff --git a/src/test/CMakeLists.txt b/src/test/CMakeLists.txt
+index b9964c8..d42f7ba 100644
+--- a/src/test/CMakeLists.txt
++++ b/src/test/CMakeLists.txt
+@@ -17,3 +17,4 @@ db_test(hello_libpmem)
+ db_test(pmem_rehash_test)
+ db_test(pmem_hash_test)
+ db_test(pmem_hash_recover_test)
++db_exe(workload)
+diff --git a/src/test/workload.cc b/src/test/workload.cc
+new file mode 100644
+index 0000000..20c2d1f
+--- /dev/null
++++ b/src/test/workload.cc
+@@ -0,0 +1,156 @@
++#include <fstream>
++#include <iostream>
++#include <map>
++#include <future>
++
++
++/* --------- Different HashTable --------*/
++//#include "turbo/turbo_hash.h"
++#include "turbo/turbo_hash_pmem_pmdk.h"
++#include "util/histogram.h"
++#include "util/logger.h"
++#include "util/perf_util.h"
++#include "util/pmm_util.h"
++#include "util/slice.h"
++#include "util/test_util.h"
++#include "util/typename.h"
++
++
++using namespace util;
++typedef turbo_pmem::unordered_map<size_t, size_t> Hashtable;
++
++
++enum OperationType {
++    INSERT,
++    UPDATE,
++    GET,
++    DELETE,
++    RANGE,
++    PRINT
++};
++
++std::map<char, OperationType> operation_type_map = {
++    {'i', OperationType::INSERT},
++    {'u', OperationType::UPDATE},
++    {'s', OperationType::GET},
++    {'d', OperationType::DELETE},
++    {'r', OperationType::RANGE},
++    {'p', OperationType::PRINT}
++};
++
++struct Operation {
++    OperationType type;
++    uint64_t key;
++    uint64_t value;
++};
++
++struct Workload {
++    std::vector<Operation> ops;
++
++    Workload(char * filename) {
++        std::ifstream input(filename);
++
++        if(!input) {
++            std::cerr << "Error opening input file" << std::endl;
++            return;
++        }
++
++        char op_c = 'i';
++        uint64_t key = 0;
++        uint64_t value = 0;
++
++        while(!input.eof()) {
++            input >> op_c;
++            input.ignore(1);
++            if(op_c != 'p') {
++              input >> key;
++              input.ignore(1);
++            }
++            
++            if(input.eof())
++              break;
++            if(op_c == 'i' || op_c == 'u') {
++                input >> value;
++                input.ignore(1);
++            }
++
++            Operation op = {operation_type_map[op_c], key, value};
++            ops.push_back(op);
++        }
++    }
++};
++
++static void NothingCallback (Hashtable::RecordType record) { return; }
++
++// MAIN
++int main(int argc, char **argv) {
++  // Parsing arguments
++  int numData = 0;
++  int n_threads = 1;
++  char *input_path = (char *)std::string("../sample_input.txt").data();
++
++  int c;  
++  while ((c = getopt(argc, argv, "n:w:t:i:")) != -1) {
++    switch (c) {
++    case 't':
++      n_threads = atoi(optarg);
++      break;
++    case 'i':
++      input_path = optarg;
++      break;
++    default:
++      break;
++    }
++  }
++
++  // Make or Read persistent pool
++  remove ("/mnt/pmem/turbohash");
++  Hashtable* hashtable_ = new Hashtable ();
++  hashtable_->Initialize (256, 8);
++
++  Workload workload(input_path);
++  numData = workload.ops.size();
++  std::cerr << "Workload: " << numData << " ops" << std::endl;
++
++  // Multithreading
++  std::vector<std::future<void>> futures(n_threads);
++
++  long data_per_thread = numData / n_threads;
++
++  for (int tid = 0; tid < n_threads; tid++) {
++    int from = data_per_thread * tid;
++    int to = (tid == n_threads - 1) ? numData : from + data_per_thread;
++
++    auto f = async(std::launch::async,
++                   [&hashtable_, &workload](int from, int to) {
++                    auto tinfo = hashtable_->getThreadInfo ();
++
++                     for (int i = from; i < to; ++i) {
++                       Operation & op = workload.ops[i];
++
++                       switch(op.type) {
++                        case OperationType::INSERT:
++                        case OperationType::UPDATE:
++                          hashtable_->Put (op.key, op.value, tinfo);
++                          break;
++
++                        case OperationType::GET:
++                          hashtable_->Find (op.key, tinfo, NothingCallback);
++                          break;
++
++                        case OperationType::DELETE:
++                          hashtable_->Delete (op.key, tinfo);
++                          break;
++                        }   
++                     }
++                   },
++                   from, to);
++    futures.push_back(move(f));
++  }
++
++  for (auto &&f : futures)
++    if (f.valid())
++      f.get();
++
++  return 0;
++}
+diff --git a/src/turbo/turbo_hash_pmem_pmdk.h b/src/turbo/turbo_hash_pmem_pmdk.h
+index 09f1603..4c37e78 100644
+--- a/src/turbo/turbo_hash_pmem_pmdk.h
++++ b/src/turbo/turbo_hash_pmem_pmdk.h
+@@ -2236,6 +2236,7 @@ private:
+ 
+         if (is_key_flat && is_value_flat) {
+             slot->Store (hash_value, key, value, record_allocator_);
++
+         } else {
+             PMEMobjpool* pop = (PMEMobjpool*)baseAddr[0];
+             TX_BEGIN (pop) {

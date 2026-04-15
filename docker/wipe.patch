@@ -1,0 +1,1624 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c0d2ff9..07dacae 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -53,7 +53,7 @@ configure_file(
+ )
+ 
+ # -march=native used to detect CPU flags and use corrosponding clflush instruction
+-set(CMAKE_CXX_FLAGS "-march=native -Wall -Wno-reorder -O3")
++set(CMAKE_CXX_FLAGS "-march=native -Wall -Wno-reorder -O0")
+ 
+ # Require C++17
+ set(CMAKE_CXX_STANDARD_REQUIRED on)
+@@ -68,7 +68,7 @@ if(OPENMP_FOUND)
+   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+ endif()
+ 
+-add_definitions(-DNDEBUG -DNDEBUGGING)
++#add_definitions(-DNDEBUG -DNDEBUGGING)
+ 
+ # MK for RMI
+ link_directories(${MKL_LINK_DIRECTORY})
+@@ -89,7 +89,7 @@ set(LETREE_SRC
+   src/pmemkv.cc
+ )
+ 
+-add_library(letree SHARED ${LETREE_SRC})
++add_library(letree STATIC ${LETREE_SRC})
+ target_link_libraries(letree pmem pmemobj mkl_rt pthread)
+ 
+ # Unit Test
+diff --git a/src/blevel.h b/src/blevel.h
+index 0441549..1b5891d 100644
+--- a/src/blevel.h
++++ b/src/blevel.h
+@@ -1,768 +1,710 @@
+ #pragma once
+ 
++#include "clevel.h"
++#include "kvbuffer.h"
++#include "letree_config.h"
++#include "pmem.h"
+ #include <atomic>
++#include <cstddef>
+ #include <cstdint>
+ #include <iostream>
+-#include <cstddef>
+-#include <vector>
+ #include <shared_mutex>
+-#include "letree_config.h"
+-#include "kvbuffer.h"
+-#include "clevel.h"
+-#include "pmem.h"
++#include <vector>
+ 
+ #include "bentry.h"
+ #include "common_time.h"
++#include <condition_variable>
+ 
+-namespace letree
+-{
++namespace letree {
+ 
+-  class Test;
+-  // #define POINTER_BENTRY
+-  // #define NobufBEntry
+-  class BLevel
+-  {
++class Test;
++// #define POINTER_BENTRY
++// #define NobufBEntry
++class BLevel {
+ #ifdef POINTER_BENTRY
+-    typedef letree::PointerBEntry bentry_t;
++  typedef letree::PointerBEntry bentry_t;
+ #else
+ #ifdef NO_ENTRY_BUF
+-    typedef letree::NobufBEntry bentry_t;
++  typedef letree::NobufBEntry bentry_t;
+ #else
+-    typedef letree::BEntry bentry_t;
++  typedef letree::BEntry bentry_t;
+ #endif // NO_ENTRY_BUF
+ #endif // POINTER_BENTRY
+ 
+-  public:
+-    class IndexIter;
++public:
++  class IndexIter;
+ 
+-  private:
+-  public:
+-    BLevel(size_t entries, CLevel::MemControl *mem = nullptr);
+-    ~BLevel();
++private:
++public:
++  BLevel(size_t entries, CLevel::MemControl *mem = nullptr);
++  ~BLevel();
+ 
+-    status Put(uint64_t key, uint64_t value, uint64_t begin, uint64_t end);
+-    bool Update(uint64_t key, uint64_t value, uint64_t begin, uint64_t end);
+-    bool Get(uint64_t key, uint64_t &value, uint64_t begin, uint64_t end) const;
+-    bool Delete(uint64_t key, uint64_t *value, uint64_t begin, uint64_t end);
++  status Put(uint64_t key, uint64_t value, uint64_t begin, uint64_t end);
++  bool Update(uint64_t key, uint64_t value, uint64_t begin, uint64_t end);
++  bool Get(uint64_t key, uint64_t &value, uint64_t begin, uint64_t end) const;
++  bool Delete(uint64_t key, uint64_t *value, uint64_t begin, uint64_t end);
+ 
+-    status PutNearPos(uint64_t key, uint64_t value, uint64_t pos);
+-    bool UpdateNearPos(uint64_t key, uint64_t value, uint64_t pos);
+-    bool GetNearPos(uint64_t key, uint64_t &value, uint64_t pos) const;
+-    bool DeleteNearPos(uint64_t key, uint64_t *value, uint64_t pos);
++  status PutNearPos(uint64_t key, uint64_t value, uint64_t pos);
++  bool UpdateNearPos(uint64_t key, uint64_t value, uint64_t pos);
++  bool GetNearPos(uint64_t key, uint64_t &value, uint64_t pos) const;
++  bool DeleteNearPos(uint64_t key, uint64_t *value, uint64_t pos);
+ 
+-    status PutRange(uint64_t key, uint64_t value, int range, uint64_t end);
+-    bool UpdateRange(uint64_t key, uint64_t value, int range, uint64_t end);
+-    bool GetRange(uint64_t key, uint64_t &value, int range, uint64_t end) const;
+-    bool DeleteRange(uint64_t key, uint64_t *value, int range, uint64_t end);
++  status PutRange(uint64_t key, uint64_t value, int range, uint64_t end);
++  bool UpdateRange(uint64_t key, uint64_t value, int range, uint64_t end);
++  bool GetRange(uint64_t key, uint64_t &value, int range, uint64_t end) const;
++  bool DeleteRange(uint64_t key, uint64_t *value, int range, uint64_t end);
+ 
+-    void Expansion(std::vector<std::pair<uint64_t, uint64_t>> &data);
++  void Expansion(std::vector<std::pair<uint64_t, uint64_t>> &data);
+ #ifdef BRANGE
+-    bool IsKeyExpanded(uint64_t key, int &range, uint64_t &end) const;
+-    void PrepareExpansion(BLevel *old_blevel);
+-    void Expansion(BLevel *old_blevel);
++  bool IsKeyExpanded(uint64_t key, int &range, uint64_t &end) const;
++  void PrepareExpansion(BLevel *old_blevel);
++  void Expansion(BLevel *old_blevel);
+ #else
+-    void Expansion(BLevel *old_blevel);
+-#endif
+-    IndexIter begin()
+-    {
+-      return IndexIter(this, 0);
+-    }
+-    IndexIter end()
+-    {
+-      return IndexIter(this, nr_entries_);
+-    }
+-    // statistic
+-    size_t CountCLevel() const;
+-    void PrefixCompression() const;
+-    int64_t CLevelTime() const;
+-    uint64_t Usage() const;
+-
+-    ALWAYS_INLINE size_t Size() const { return size_; }
+-    ALWAYS_INLINE CLevel::MemControl *MemControl() const { return clevel_mem_; }
+-    ALWAYS_INLINE size_t Entries() const { return nr_entries_; }
+-    ALWAYS_INLINE uint64_t EntryKey(int logical_idx) const
+-    {
++  void Expansion(BLevel *old_blevel);
++#endif
++  IndexIter begin() { return IndexIter(this, 0); }
++  IndexIter end() { return IndexIter(this, nr_entries_); }
++  // statistic
++  size_t CountCLevel() const;
++  void PrefixCompression() const;
++  int64_t CLevelTime() const;
++  uint64_t Usage() const;
++
++  ALWAYS_INLINE size_t Size() const { return size_; }
++  ALWAYS_INLINE CLevel::MemControl *MemControl() const { return clevel_mem_; }
++  ALWAYS_INLINE size_t Entries() const { return nr_entries_; }
++  ALWAYS_INLINE uint64_t EntryKey(int logical_idx) const {
+ #ifdef BRANGE
+-      return entries_[GetPhysical_(logical_idx)].entry_key;
++    return entries_[GetPhysical_(logical_idx)].entry_key;
+ #else
+-      return entries_[logical_idx].entry_key;
++    return entries_[logical_idx].entry_key;
+ #endif
+-    }
++  }
+ 
+-    class Iter
+-    {
+-    public:
+-      Iter(const BLevel *blevel)
+-          : blevel_(blevel), entry_idx_(0), range_end_(blevel->ranges_[0].entries),
+-            range_(0), locked_(false)
+-      {
++  class Iter {
++  public:
++    Iter(const BLevel *blevel)
++        : blevel_(blevel), entry_idx_(0),
++          range_end_(blevel->ranges_[0].entries), range_(0), locked_(false) {
+ #ifndef NO_LOCK
+-        blevel_->lock_[entry_idx_].lock_shared();
+-        locked_ = true;
+-        uint64_t last_idx = entry_idx_;
++      blevel_->lock_[entry_idx_].lock_shared();
++      locked_ = true;
++      uint64_t last_idx = entry_idx_;
+ #endif
+-        new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_);
+-        while (iter_.end() && NextIndex_())
+-        {
++      new (&iter_)
++          bentry_t::Iter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_);
++      while (iter_.end() && NextIndex_()) {
+ #ifndef NO_LOCK
+-          blevel_->lock_[last_idx].unlock_shared();
+-          blevel_->lock_[entry_idx_].lock_shared();
+-          last_idx = entry_idx_;
++        blevel_->lock_[last_idx].unlock_shared();
++        blevel_->lock_[entry_idx_].lock_shared();
++        last_idx = entry_idx_;
+ #endif
+-          new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_);
+-        }
+-        if (end())
+-        {
++        new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_],
++                                    blevel_->clevel_mem_);
++      }
++      if (end()) {
+ #ifndef NO_LOCK
+-          blevel_->lock_[last_idx].unlock_shared();
++        blevel_->lock_[last_idx].unlock_shared();
+ #endif
+-          locked_ = false;
+-        }
++        locked_ = false;
+       }
++    }
+ 
+-      Iter(const BLevel *blevel, uint64_t start_key, uint64_t begin, uint64_t end)
+-          : blevel_(blevel), locked_(false)
+-      {
++    Iter(const BLevel *blevel, uint64_t start_key, uint64_t begin, uint64_t end)
++        : blevel_(blevel), locked_(false) {
+ #ifdef BRANGE
+-        range_ = blevel_->FindBRangeByKey_(start_key);
+-        range_end_ = blevel_->ranges_[range_].physical_entry_start + blevel_->ranges_[range_].entries;
+-        begin = (begin >= blevel_->ranges_[range_].logical_entry_start) ? blevel_->GetPhysical_(blevel_->ranges_[range_], begin) : blevel_->ranges_[range_].physical_entry_start;
+-        end = (end < blevel_->ranges_[range_ + 1].logical_entry_start) ? blevel_->GetPhysical_(blevel_->ranges_[range_], end) : blevel_->ranges_[range_].physical_entry_start + blevel_->ranges_[range_].entries - 1;
+-        entry_idx_ = blevel_->BinarySearch_(start_key, begin, end);
++      range_ = blevel_->FindBRangeByKey_(start_key);
++      range_end_ = blevel_->ranges_[range_].physical_entry_start +
++                   blevel_->ranges_[range_].entries;
++      begin = (begin >= blevel_->ranges_[range_].logical_entry_start)
++                  ? blevel_->GetPhysical_(blevel_->ranges_[range_], begin)
++                  : blevel_->ranges_[range_].physical_entry_start;
++      end = (end < blevel_->ranges_[range_ + 1].logical_entry_start)
++                ? blevel_->GetPhysical_(blevel_->ranges_[range_], end)
++                : blevel_->ranges_[range_].physical_entry_start +
++                      blevel_->ranges_[range_].entries - 1;
++      entry_idx_ = blevel_->BinarySearch_(start_key, begin, end);
+ #else
+-        entry_idx_ = blevel_->Find_(start_key, begin, end);
++      entry_idx_ = blevel_->Find_(start_key, begin, end);
+ #endif
+ #ifndef NO_LOCK
+-        blevel_->lock_[entry_idx_].lock_shared();
+-        locked_ = true;
+-        uint64_t last_idx = entry_idx_;
++      blevel_->lock_[entry_idx_].lock_shared();
++      locked_ = true;
++      uint64_t last_idx = entry_idx_;
+ #endif
+-        new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_, start_key);
+-        while (iter_.end() && NextIndex_())
+-        {
++      new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_],
++                                  blevel_->clevel_mem_, start_key);
++      while (iter_.end() && NextIndex_()) {
+ #ifndef NO_LOCK
+-          blevel_->lock_[last_idx].unlock_shared();
+-          blevel_->lock_[entry_idx_].lock_shared();
+-          last_idx = entry_idx_;
++        blevel_->lock_[last_idx].unlock_shared();
++        blevel_->lock_[entry_idx_].lock_shared();
++        last_idx = entry_idx_;
+ #endif
+-          new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_, start_key);
+-        }
+-        if (this->end())
+-        {
++        new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_],
++                                    blevel_->clevel_mem_, start_key);
++      }
++      if (this->end()) {
+ #ifndef NO_LOCK
+-          blevel_->lock_[last_idx].unlock_shared();
++        blevel_->lock_[last_idx].unlock_shared();
+ #endif
+-          locked_ = false;
+-        }
++        locked_ = false;
+       }
++    }
+ 
+-      ~Iter()
+-      {
++    ~Iter() {
+ #ifndef NO_LOCK
+-        if (locked_)
+-        {
+-          blevel_->lock_[entry_idx_].unlock_shared();
++      if (locked_) {
++        blevel_->lock_[entry_idx_].unlock_shared();
+ #endif
+-        }
+       }
++    }
+ 
+-      ALWAYS_INLINE uint64_t key() const
+-      {
+-        return iter_.key();
+-      }
++    ALWAYS_INLINE uint64_t key() const { return iter_.key(); }
+ 
+-      ALWAYS_INLINE uint64_t value() const
+-      {
+-        return iter_.value();
+-      }
++    ALWAYS_INLINE uint64_t value() const { return iter_.value(); }
+ 
+-      ALWAYS_INLINE bool next()
+-      {
+-        if (!iter_.next())
+-        {
++    ALWAYS_INLINE bool next() {
++      if (!iter_.next()) {
+ #ifndef NO_LOCK
+-          uint64_t last_idx = entry_idx_;
++        uint64_t last_idx = entry_idx_;
+ #endif
+-          while (iter_.end() && NextIndex_())
+-          {
+-#ifndef NO_LOCK
+-            blevel_->lock_[last_idx].unlock_shared();
+-            blevel_->lock_[entry_idx_].lock_shared();
+-            last_idx = entry_idx_;
+-#endif
+-            new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_);
+-          }
+-          if (end())
+-          {
++        while (iter_.end() && NextIndex_()) {
+ #ifndef NO_LOCK
+-            blevel_->lock_[last_idx].unlock_shared();
+-#endif
+-            locked_ = false;
+-            return false;
+-          }
+-          else
+-          {
+-            return true;
+-          }
++          blevel_->lock_[last_idx].unlock_shared();
++          blevel_->lock_[entry_idx_].lock_shared();
++          last_idx = entry_idx_;
++#endif
++          new (&iter_) bentry_t::Iter(&blevel_->entries_[entry_idx_],
++                                      blevel_->clevel_mem_);
+         }
+-        else
+-        {
++        if (end()) {
++#ifndef NO_LOCK
++          blevel_->lock_[last_idx].unlock_shared();
++#endif
++          locked_ = false;
++          return false;
++        } else {
+           return true;
+         }
++      } else {
++        return true;
+       }
++    }
+ 
+-      ALWAYS_INLINE bool end() const
+-      {
++    ALWAYS_INLINE bool end() const {
+ #ifdef BRANGE
+-        return range_ >= EXPAND_THREADS;
++      return range_ >= EXPAND_THREADS;
+ #else
+-      return entry_idx_ >= blevel_->Entries();
++    return entry_idx_ >= blevel_->Entries();
+ #endif
+-      }
++    }
+ 
+-    private:
+-      ALWAYS_INLINE bool NextIndex_()
+-      {
++  private:
++    ALWAYS_INLINE bool NextIndex_() {
+ #ifdef BRANGE
+-        if (++entry_idx_ < range_end_)
+-        {
+-          return true;
+-        }
+-        else
+-        {
+-          if (++range_ == EXPAND_THREADS)
+-            return false;
+-          entry_idx_ = blevel_->ranges_[range_].physical_entry_start;
+-          range_end_ = entry_idx_ + blevel_->ranges_[range_].entries;
+-          return true;
+-        }
++      if (++entry_idx_ < range_end_) {
++        return true;
++      } else {
++        if (++range_ == EXPAND_THREADS)
++          return false;
++        entry_idx_ = blevel_->ranges_[range_].physical_entry_start;
++        range_end_ = entry_idx_ + blevel_->ranges_[range_].entries;
++        return true;
++      }
+ #else
+-      return ++entry_idx_ < blevel_->Entries();
++    return ++entry_idx_ < blevel_->Entries();
+ #endif
+-      }
++    }
++
++    bentry_t::Iter iter_;
++    const BLevel *blevel_;
++    uint64_t entry_idx_;
++    uint64_t range_end_;
++    int range_;
++    bool locked_;
++  };
+ 
+-      bentry_t::Iter iter_;
+-      const BLevel *blevel_;
+-      uint64_t entry_idx_;
+-      uint64_t range_end_;
+-      int range_;
+-      bool locked_;
+-    };
+-
+-    class NoSortIter
+-    {
+-    public:
+-      NoSortIter(const BLevel *blevel)
+-          : blevel_(blevel), entry_idx_(0), range_end_(blevel->ranges_[0].entries),
+-            range_(0), locked_(false)
+-      {
++  class NoSortIter {
++  public:
++    NoSortIter(const BLevel *blevel)
++        : blevel_(blevel), entry_idx_(0),
++          range_end_(blevel->ranges_[0].entries), range_(0), locked_(false) {
+ #ifndef NO_LOCK
+-        blevel_->lock_[entry_idx_].lock_shared();
+-        locked_ = true;
+-        uint64_t last_idx = entry_idx_;
++      blevel_->lock_[entry_idx_].lock_shared();
++      locked_ = true;
++      uint64_t last_idx = entry_idx_;
+ #endif
+-        new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_);
+-        while (iter_.end() && NextIndex_())
+-        {
++      new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_],
++                                        blevel_->clevel_mem_);
++      while (iter_.end() && NextIndex_()) {
+ #ifndef NO_LOCK
+-          blevel_->lock_[last_idx].unlock_shared();
+-          blevel_->lock_[entry_idx_].lock_shared();
+-          last_idx = entry_idx_;
++        blevel_->lock_[last_idx].unlock_shared();
++        blevel_->lock_[entry_idx_].lock_shared();
++        last_idx = entry_idx_;
+ #endif
+-          new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_);
+-        }
+-        if (end())
+-        {
++        new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_],
++                                          blevel_->clevel_mem_);
++      }
++      if (end()) {
+ #ifndef NO_LOCK
+-          blevel_->lock_[last_idx].unlock_shared();
++        blevel_->lock_[last_idx].unlock_shared();
+ #endif
+-          locked_ = false;
+-        }
++        locked_ = false;
+       }
++    }
+ 
+-      NoSortIter(const BLevel *blevel, uint64_t start_key, uint64_t begin, uint64_t end)
+-          : blevel_(blevel), locked_(false)
+-      {
++    NoSortIter(const BLevel *blevel, uint64_t start_key, uint64_t begin,
++               uint64_t end)
++        : blevel_(blevel), locked_(false) {
+ #ifdef BRANGE
+-        range_ = blevel_->FindBRangeByKey_(start_key);
+-        range_end_ = blevel_->ranges_[range_].physical_entry_start + blevel_->ranges_[range_].entries;
+-        begin = (begin >= blevel_->ranges_[range_].logical_entry_start) ? blevel_->GetPhysical_(blevel_->ranges_[range_], begin) : blevel_->ranges_[range_].physical_entry_start;
+-        end = (end < blevel_->ranges_[range_ + 1].logical_entry_start) ? blevel_->GetPhysical_(blevel_->ranges_[range_], end) : blevel_->ranges_[range_].physical_entry_start + blevel_->ranges_[range_].entries - 1;
+-        entry_idx_ = blevel_->BinarySearch_(start_key, begin, end);
++      range_ = blevel_->FindBRangeByKey_(start_key);
++      range_end_ = blevel_->ranges_[range_].physical_entry_start +
++                   blevel_->ranges_[range_].entries;
++      begin = (begin >= blevel_->ranges_[range_].logical_entry_start)
++                  ? blevel_->GetPhysical_(blevel_->ranges_[range_], begin)
++                  : blevel_->ranges_[range_].physical_entry_start;
++      end = (end < blevel_->ranges_[range_ + 1].logical_entry_start)
++                ? blevel_->GetPhysical_(blevel_->ranges_[range_], end)
++                : blevel_->ranges_[range_].physical_entry_start +
++                      blevel_->ranges_[range_].entries - 1;
++      entry_idx_ = blevel_->BinarySearch_(start_key, begin, end);
+ #else
+-      entry_idx_ = blevel_->Find_(start_key, begin, end);
++    entry_idx_ = blevel_->Find_(start_key, begin, end);
+ #endif
+ #ifndef NO_LOCK
+-        blevel_->lock_[entry_idx_].lock_shared();
+-        locked_ = true;
+-        uint64_t last_idx = entry_idx_;
++      blevel_->lock_[entry_idx_].lock_shared();
++      locked_ = true;
++      uint64_t last_idx = entry_idx_;
+ #endif
+-        new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_, start_key);
+-        while (iter_.end() && NextIndex_())
+-        {
++      new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_],
++                                        blevel_->clevel_mem_, start_key);
++      while (iter_.end() && NextIndex_()) {
+ #ifndef NO_LOCK
+-          blevel_->lock_[last_idx].unlock_shared();
+-          blevel_->lock_[entry_idx_].lock_shared();
+-          last_idx = entry_idx_;
++        blevel_->lock_[last_idx].unlock_shared();
++        blevel_->lock_[entry_idx_].lock_shared();
++        last_idx = entry_idx_;
+ #endif
+-          new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_, start_key);
+-        }
+-        if (this->end())
+-        {
++        new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_],
++                                          blevel_->clevel_mem_, start_key);
++      }
++      if (this->end()) {
+ #ifndef NO_LOCK
+-          blevel_->lock_[last_idx].unlock_shared();
++        blevel_->lock_[last_idx].unlock_shared();
+ #endif
+-          locked_ = false;
+-        }
++        locked_ = false;
+       }
++    }
+ 
+-      ~NoSortIter()
+-      {
++    ~NoSortIter() {
+ #ifndef NO_LOCK
+-        if (locked_)
+-          blevel_->lock_[entry_idx_].unlock_shared();
++      if (locked_)
++        blevel_->lock_[entry_idx_].unlock_shared();
+ #endif
+-      }
++    }
+ 
+-      ALWAYS_INLINE uint64_t key() const
+-      {
+-        return iter_.key();
+-      }
++    ALWAYS_INLINE uint64_t key() const { return iter_.key(); }
+ 
+-      ALWAYS_INLINE uint64_t value() const
+-      {
+-        return iter_.value();
+-      }
++    ALWAYS_INLINE uint64_t value() const { return iter_.value(); }
+ 
+-      ALWAYS_INLINE bool next()
+-      {
+-        if (!iter_.next())
+-        {
++    ALWAYS_INLINE bool next() {
++      if (!iter_.next()) {
+ #ifndef NO_LOCK
+-          uint64_t last_idx = entry_idx_;
++        uint64_t last_idx = entry_idx_;
+ #endif
+-          while (iter_.end() && NextIndex_())
+-          {
++        while (iter_.end() && NextIndex_()) {
+ #ifndef NO_LOCK
+-            blevel_->lock_[last_idx].unlock_shared();
+-            blevel_->lock_[entry_idx_].lock_shared();
+-            last_idx = entry_idx_;
+-#endif
+-            new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_], blevel_->clevel_mem_);
+-          }
+-          if (end())
+-          {
+-#ifndef NO_LOCK
+-            blevel_->lock_[last_idx].unlock_shared();
+-#endif
+-            locked_ = false;
+-            return false;
+-          }
+-          else
+-          {
+-            return true;
+-          }
++          blevel_->lock_[last_idx].unlock_shared();
++          blevel_->lock_[entry_idx_].lock_shared();
++          last_idx = entry_idx_;
++#endif
++          new (&iter_) bentry_t::NoSortIter(&blevel_->entries_[entry_idx_],
++                                            blevel_->clevel_mem_);
+         }
+-        else
+-        {
++        if (end()) {
++#ifndef NO_LOCK
++          blevel_->lock_[last_idx].unlock_shared();
++#endif
++          locked_ = false;
++          return false;
++        } else {
+           return true;
+         }
++      } else {
++        return true;
+       }
++    }
+ 
+-      ALWAYS_INLINE bool end() const
+-      {
++    ALWAYS_INLINE bool end() const {
+ #ifdef BRANGE
+-        return range_ >= EXPAND_THREADS;
++      return range_ >= EXPAND_THREADS;
+ #else
+-      return entry_idx_ >= blevel_->Entries();
++    return entry_idx_ >= blevel_->Entries();
+ #endif
+-      }
++    }
+ 
+-    private:
+-      ALWAYS_INLINE bool NextIndex_()
+-      {
++  private:
++    ALWAYS_INLINE bool NextIndex_() {
+ #ifdef BRANGE
+-        if (++entry_idx_ < range_end_)
+-        {
+-          return true;
+-        }
+-        else
+-        {
+-          if (++range_ == EXPAND_THREADS)
+-            return false;
+-          entry_idx_ = blevel_->ranges_[range_].physical_entry_start;
+-          range_end_ = entry_idx_ + blevel_->ranges_[range_].entries;
+-          return true;
+-        }
++      if (++entry_idx_ < range_end_) {
++        return true;
++      } else {
++        if (++range_ == EXPAND_THREADS)
++          return false;
++        entry_idx_ = blevel_->ranges_[range_].physical_entry_start;
++        range_end_ = entry_idx_ + blevel_->ranges_[range_].entries;
++        return true;
++      }
+ #else
+-      return ++entry_idx_ < blevel_->Entries();
++    return ++entry_idx_ < blevel_->Entries();
+ #endif
+-      }
++    }
+ 
+-      bentry_t::NoSortIter iter_;
+-      const BLevel *blevel_;
+-      uint64_t entry_idx_;
+-      uint64_t range_end_;
+-      int range_;
+-      bool locked_;
+-    };
++    bentry_t::NoSortIter iter_;
++    const BLevel *blevel_;
++    uint64_t entry_idx_;
++    uint64_t range_end_;
++    int range_;
++    bool locked_;
++  };
+ 
+-    friend Test;
++  friend Test;
+ 
+ #ifdef BRANGE
+-    static std::mutex expand_wait_lock;
+-    static std::condition_variable expand_wait_cv;
+-#endif
+-
+-  private:
+-    struct ExpandData
+-    {
+-      bentry_t *new_addr;
+-      bentry_t *max_addr;
+-      uint64_t key_buf[BLEVEL_EXPAND_BUF_KEY];
+-      uint64_t value_buf[BLEVEL_EXPAND_BUF_KEY];
+-      uint64_t clevel_data_count;
+-      uint64_t clevel_count;
+-      uint64_t bentry_max_count;
+-      uint64_t size;
++  static std::mutex expand_wait_lock;
++  static std::condition_variable expand_wait_cv;
++#endif
++
++private:
++  struct ExpandData {
++    bentry_t *new_addr;
++    bentry_t *max_addr;
++    uint64_t key_buf[BLEVEL_EXPAND_BUF_KEY];
++    uint64_t value_buf[BLEVEL_EXPAND_BUF_KEY];
++    uint64_t clevel_data_count;
++    uint64_t clevel_count;
++    uint64_t bentry_max_count;
++    uint64_t size;
+ #ifdef BRANGE
+-      uint64_t begin_range;
+-      uint64_t begin_interval;
+-      uint64_t end_range;
+-      uint64_t end_interval;
+-      uint64_t target_range;
+-#endif
+-      uint64_t entry_key;
+-      uint64_t last_entry_key;
+-      int buf_count;
+-      std::atomic<uint64_t> *max_key;
+-      std::atomic<uint64_t> *expanded_entries;
+-
+-      ExpandData() = default;
+-
+-      ExpandData(bentry_t *begin_addr, bentry_t *end_addr, uint64_t first_entry_key)
+-          : new_addr(begin_addr), max_addr(end_addr), clevel_data_count(0),
+-            clevel_count(0), size(0),
++    uint64_t begin_range;
++    uint64_t begin_interval;
++    uint64_t end_range;
++    uint64_t end_interval;
++    uint64_t target_range;
++#endif
++    uint64_t entry_key;
++    uint64_t last_entry_key;
++    int buf_count;
++    std::atomic<uint64_t> *max_key;
++    std::atomic<uint64_t> *expanded_entries;
++
++    ExpandData() = default;
++
++    ExpandData(bentry_t *begin_addr, bentry_t *end_addr,
++               uint64_t first_entry_key)
++        : new_addr(begin_addr), max_addr(end_addr), clevel_data_count(0),
++          clevel_count(0), size(0),
+ #ifdef BRANGE
+-            begin_range(0), begin_interval(0), end_range(0),
+-            end_interval(0), target_range(0),
++          begin_range(0), begin_interval(0), end_range(0), end_interval(0),
++          target_range(0),
+ #endif
+-            entry_key(first_entry_key), buf_count(0), max_key(nullptr), expanded_entries(nullptr)
+-      {
+-      }
++          entry_key(first_entry_key), buf_count(0), max_key(nullptr),
++          expanded_entries(nullptr) {
++    }
+ 
+-      void FlushToEntry(bentry_t *entry, int prefix_len, CLevel::MemControl *mem);
+-    };
++    void FlushToEntry(bentry_t *entry, int prefix_len, CLevel::MemControl *mem);
++  };
+ 
+-    // member
+-    void *pmem_addr_;
+-    size_t mapped_len_;
+-    std::string pmem_file_;
+-    static int file_id_;
++  // member
++  void *pmem_addr_;
++  size_t mapped_len_;
++  std::string pmem_file_;
++  static int file_id_;
+ 
+-    uint64_t entries_offset_;                        // pmem file offset
+-    bentry_t *__attribute__((aligned(64))) entries_; // current mmaped address
+-    size_t nr_entries_;                              // logical entries count
+-    size_t physical_nr_entries_;                     // physical entries count
+-    std::atomic<size_t> size_;
+-    CLevel::MemControl *clevel_mem_;
++  uint64_t entries_offset_;                        // pmem file offset
++  bentry_t *__attribute__((aligned(64))) entries_; // current mmaped address
++  size_t nr_entries_;                              // logical entries count
++  size_t physical_nr_entries_;                     // physical entries count
++  std::atomic<size_t> size_;
++  CLevel::MemControl *clevel_mem_;
+ 
+ #ifndef NO_LOCK
+-    std::shared_mutex *lock_;
++  std::shared_mutex *lock_;
+ #endif
+ 
+ #ifdef BRANGE
+-    struct __attribute__((aligned(64))) BRange
+-    {
+-      uint64_t start_key;
+-      uint32_t logical_entry_start;
+-      uint32_t physical_entry_start;
+-      uint32_t entries;
+-    } ranges_[EXPAND_THREADS + 1];
+-
+-    // logical continuous interval, every interval contains interval_size_ entries,
+-    // size_per_interval_ contains kv-pair size per interval.
+-    uint64_t interval_size_;
+-    uint64_t intervals_[EXPAND_THREADS];
+-    mutable std::atomic<size_t> *size_per_interval_[EXPAND_THREADS];
+-
+-    static ExpandData expand_data_[EXPAND_THREADS];
+-    static std::atomic<uint64_t> expanded_max_key_[EXPAND_THREADS];
+-    static std::atomic<uint64_t> expanded_entries_[EXPAND_THREADS];
+-#endif
+-
+-    // function
+-#ifdef BRANGE
+-    ALWAYS_INLINE int FindBRange_(uint64_t logical_idx) const
+-    {
+-      for (int i = EXPAND_THREADS - 1; i >= 0; --i)
+-        if (logical_idx >= ranges_[i].logical_entry_start)
+-          return i;
+-      assert(0);
+-      return -1;
+-    }
+-
+-    ALWAYS_INLINE bool HasPrevPhyIdx(uint64_t phy_idx) const
+-    {
+-      int idx = EXPAND_THREADS - 1;
+-      for (; idx >= 0; --idx)
+-      {
+-        if (phy_idx >= ranges_[idx].physical_entry_start)
+-          break;
+-      }
+-      return !(phy_idx == ranges_[idx].physical_entry_start);
+-    }
+-
+-    ALWAYS_INLINE bool HasNextPhyIdx(uint64_t phy_idx) const
+-    {
+-      int idx = 0;
+-      for (; idx < EXPAND_THREADS && phy_idx <= ranges_[idx].physical_entry_start; idx++)
+-        ;
+-      idx--;
+-      return !((phy_idx - ranges_[idx].physical_entry_start) == ranges_[idx].entries);
+-    }
+-
+-    ALWAYS_INLINE int FindBRangeByKey_(uint64_t key) const
+-    {
+-      for (int i = EXPAND_THREADS - 1; i >= 0; --i)
+-        if (key >= ranges_[i].start_key)
+-          return i;
+-      assert(0);
+-      return -1;
+-    }
+-
+-    ALWAYS_INLINE uint64_t GetPhysical_(const BRange &range, uint64_t logical_idx) const
+-    {
+-      // assert(logical_idx - range.logical_entry_start < range.entries);
+-      return range.physical_entry_start + (logical_idx - range.logical_entry_start);
+-    }
++  struct __attribute__((aligned(64))) BRange {
++    uint64_t start_key;
++    uint32_t logical_entry_start;
++    uint32_t physical_entry_start;
++    uint32_t entries;
++  } ranges_[EXPAND_THREADS + 1];
+ 
+-    ALWAYS_INLINE uint64_t GetPhysical_(uint64_t logical_idx) const
+-    {
+-      return GetPhysical_(ranges_[FindBRange_(logical_idx)], logical_idx);
+-    }
++  // logical continuous interval, every interval contains interval_size_
++  // entries, size_per_interval_ contains kv-pair size per interval.
++  uint64_t interval_size_;
++  uint64_t intervals_[EXPAND_THREADS];
++  mutable std::atomic<size_t> *size_per_interval_[EXPAND_THREADS];
+ 
+-    ALWAYS_INLINE uint64_t GetLogical_(const BRange &range, uint64_t physical_idx) const
+-    {
+-      return range.logical_entry_start + (physical_idx - range.physical_entry_start);
+-    }
++  static ExpandData expand_data_[EXPAND_THREADS];
++  static std::atomic<uint64_t> expanded_max_key_[EXPAND_THREADS];
++  static std::atomic<uint64_t> expanded_entries_[EXPAND_THREADS];
+ #endif
+ 
+-  public:
++  // function
+ #ifdef BRANGE
+-    void ExpandRange_(BLevel *old_blevel, int thread_id);
+-    void FinishExpansion_();
+-    uint64_t Find_(uint64_t key, uint64_t begin, uint64_t end, std::atomic<size_t> **interval) const;
+-    uint64_t FindNearPos_(uint64_t key, uint64_t pos, std::atomic<size_t> **interval) const;
+-    uint64_t NearPosRange_(uint64_t key, uint64_t pos, uint64_t &begin, uint64_t &end);
+-    uint64_t FindByRange_(uint64_t key, int range, uint64_t end, std::atomic<size_t> **interval) const;
+-    uint64_t BinarySearch_(uint64_t key, uint64_t begin, uint64_t end) const;
++  ALWAYS_INLINE int FindBRange_(uint64_t logical_idx) const {
++    for (int i = EXPAND_THREADS - 1; i >= 0; --i)
++      if (logical_idx >= ranges_[i].logical_entry_start)
++        return i;
++    assert(0);
++    return -1;
++  }
++
++  ALWAYS_INLINE bool HasPrevPhyIdx(uint64_t phy_idx) const {
++    int idx = EXPAND_THREADS - 1;
++    for (; idx >= 0; --idx) {
++      if (phy_idx >= ranges_[idx].physical_entry_start)
++        break;
++    }
++    return !(phy_idx == ranges_[idx].physical_entry_start);
++  }
++
++  ALWAYS_INLINE bool HasNextPhyIdx(uint64_t phy_idx) const {
++    int idx = 0;
++    for (; idx < EXPAND_THREADS && phy_idx <= ranges_[idx].physical_entry_start;
++         idx++)
++      ;
++    idx--;
++    return !((phy_idx - ranges_[idx].physical_entry_start) ==
++             ranges_[idx].entries);
++  }
++
++  ALWAYS_INLINE int FindBRangeByKey_(uint64_t key) const {
++    for (int i = EXPAND_THREADS - 1; i >= 0; --i)
++      if (key >= ranges_[i].start_key)
++        return i;
++    assert(0);
++    return -1;
++  }
++
++  ALWAYS_INLINE uint64_t GetPhysical_(const BRange &range,
++                                      uint64_t logical_idx) const {
++    // assert(logical_idx - range.logical_entry_start < range.entries);
++    return range.physical_entry_start +
++           (logical_idx - range.logical_entry_start);
++  }
++
++  ALWAYS_INLINE uint64_t GetPhysical_(uint64_t logical_idx) const {
++    return GetPhysical_(ranges_[FindBRange_(logical_idx)], logical_idx);
++  }
++
++  ALWAYS_INLINE uint64_t GetLogical_(const BRange &range,
++                                     uint64_t physical_idx) const {
++    return range.logical_entry_start +
++           (physical_idx - range.physical_entry_start);
++  }
++#endif
++
++public:
++#ifdef BRANGE
++  void ExpandRange_(BLevel *old_blevel, int thread_id);
++  void FinishExpansion_();
++  uint64_t Find_(uint64_t key, uint64_t begin, uint64_t end,
++                 std::atomic<size_t> **interval) const;
++  uint64_t FindNearPos_(uint64_t key, uint64_t pos,
++                        std::atomic<size_t> **interval) const;
++  uint64_t NearPosRange_(uint64_t key, uint64_t pos, uint64_t &begin,
++                         uint64_t &end);
++  uint64_t FindByRange_(uint64_t key, int range, uint64_t end,
++                        std::atomic<size_t> **interval) const;
++  uint64_t BinarySearch_(uint64_t key, uint64_t begin, uint64_t end) const;
+ #else
+-  uint64_t Find_(uint64_t key, uint64_t begin, uint64_t end) const;
+-  uint64_t FindNearPos_(uint64_t key, uint64_t pos) const;
+-  uint64_t NearPosRange_(uint64_t key, uint64_t pos, uint64_t &begin, uint64_t &end);
++uint64_t Find_(uint64_t key, uint64_t begin, uint64_t end) const;
++uint64_t FindNearPos_(uint64_t key, uint64_t pos) const;
++uint64_t NearPosRange_(uint64_t key, uint64_t pos, uint64_t &begin,
++                       uint64_t &end);
+ #endif
+-    void ExpandSetup_(ExpandData &data);
+-    void ExpandPut_(ExpandData &data, uint64_t key, uint64_t value);
+-    void ExpandFinish_(ExpandData &data);
++  void ExpandSetup_(ExpandData &data);
++  void ExpandPut_(ExpandData &data, uint64_t key, uint64_t value);
++  void ExpandFinish_(ExpandData &data);
+ 
+-    ALWAYS_INLINE status Put_(uint64_t key, uint64_t value, uint64_t physical_idx
++  ALWAYS_INLINE status Put_(uint64_t key, uint64_t value, uint64_t physical_idx
+ #ifdef BRANGE
+-                              ,
+-                              std::atomic<size_t> *interval_size
++                            ,
++                            std::atomic<size_t> *interval_size
+ #endif
+-    )
+-    {
+-      // assert(entries_[physical_idx].entry_key <= key);
++  ) {
++    // assert(entries_[physical_idx].entry_key <= key);
+ #ifndef NO_LOCK
+-      std::lock_guard<std::shared_mutex> lock(lock_[physical_idx]);
++    std::lock_guard<std::shared_mutex> lock(lock_[physical_idx]);
+ #endif
+-      // Common::timers["CLevel_times"].start();
+-      if (!entries_[physical_idx].IsValid())
+-        return status::Failed;
++    // Common::timers["CLevel_times"].start();
++    if (!entries_[physical_idx].IsValid())
++      return status::Failed;
+ 
+-      auto ret = entries_[physical_idx].Put(clevel_mem_, key, value);
+-      size_.fetch_add(1, std::memory_order_relaxed);
++    auto ret = entries_[physical_idx].Put(clevel_mem_, key, value);
++    size_.fetch_add(1, std::memory_order_relaxed);
+ #ifdef BRANGE
+-      interval_size->fetch_add(1, std::memory_order_relaxed);
+-#endif
+-
+-      // #ifdef POINTER_BENTRY
+-      //     if(ret == status::Full) {
+-      //         if(HasPrevPhyIdx(physical_idx) && (entries_[physical_idx - 1].buf.entries <= (PointerBEntry::entry_count / 2))) {
+-      //             return MergePointerBEntry(&entries_[physical_idx - 1], &entries_[physical_idx], clevel_mem_, key, value);
+-      //         }
+-      //         if(HasNextPhyIdx(physical_idx) && (entries_[physical_idx + 1].buf.entries <= (PointerBEntry::entry_count / 2))) {
+-      //             return MergePointerBEntry(&entries_[physical_idx], &entries_[physical_idx + 1], clevel_mem_, key, value);
+-      //         }
+-      //     }
+-      // #endif
+-      // Common::timers["CLevel_times"].end();
+-      return ret;
+-    }
+-
+-    ALWAYS_INLINE bool Update_(uint64_t key, uint64_t value, uint64_t physical_idx) const
+-    {
++    interval_size->fetch_add(1, std::memory_order_relaxed);
++#endif
++
++    // #ifdef POINTER_BENTRY
++    //     if(ret == status::Full) {
++    //         if(HasPrevPhyIdx(physical_idx) && (entries_[physical_idx -
++    //         1].buf.entries <= (PointerBEntry::entry_count / 2))) {
++    //             return MergePointerBEntry(&entries_[physical_idx - 1],
++    //             &entries_[physical_idx], clevel_mem_, key, value);
++    //         }
++    //         if(HasNextPhyIdx(physical_idx) && (entries_[physical_idx +
++    //         1].buf.entries <= (PointerBEntry::entry_count / 2))) {
++    //             return MergePointerBEntry(&entries_[physical_idx],
++    //             &entries_[physical_idx + 1], clevel_mem_, key, value);
++    //         }
++    //     }
++    // #endif
++    // Common::timers["CLevel_times"].end();
++    return ret;
++  }
++
++  ALWAYS_INLINE bool Update_(uint64_t key, uint64_t value,
++                             uint64_t physical_idx) const {
+ #ifndef NO_LOCK
+-      std::lock_guard<std::shared_mutex> lock(lock_[physical_idx]);
++    std::lock_guard<std::shared_mutex> lock(lock_[physical_idx]);
+ #endif
+-      if (!entries_[physical_idx].IsValid())
+-        return false;
+-      return entries_[physical_idx].Update((CLevel::MemControl *)clevel_mem_, key, value);
+-    }
++    if (!entries_[physical_idx].IsValid())
++      return false;
++    return entries_[physical_idx].Update((CLevel::MemControl *)clevel_mem_, key,
++                                         value);
++  }
+ 
+-    ALWAYS_INLINE bool Get_(uint64_t key, uint64_t &value, uint64_t physical_idx) const
+-    {
++  ALWAYS_INLINE bool Get_(uint64_t key, uint64_t &value,
++                          uint64_t physical_idx) const {
+ #ifndef NO_LOCK
+-      std::shared_lock<std::shared_mutex> lock(lock_[physical_idx]);
+-#endif
+-      // Common::timers["CLevel_times"].start();
+-      if (!entries_[physical_idx].IsValid())
+-        return false;
+-      bool ret = entries_[physical_idx].Get((CLevel::MemControl *)clevel_mem_, key, value);
+-      // Common::timers["CLevel_times"].end();
+-      return ret;
+-    }
+-
+-    ALWAYS_INLINE bool Delete_(uint64_t key, uint64_t *value, uint64_t physical_idx
++    std::shared_lock<std::shared_mutex> lock(lock_[physical_idx]);
++#endif
++    // Common::timers["CLevel_times"].start();
++    if (!entries_[physical_idx].IsValid())
++      return false;
++    bool ret = entries_[physical_idx].Get((CLevel::MemControl *)clevel_mem_,
++                                          key, value);
++    // Common::timers["CLevel_times"].end();
++    return ret;
++  }
++
++  ALWAYS_INLINE bool Delete_(uint64_t key, uint64_t *value,
++                             uint64_t physical_idx
+ #ifdef BRANGE
+-                               ,
+-                               std::atomic<size_t> *interval_size
++                             ,
++                             std::atomic<size_t> *interval_size
+ #endif
+-    )
+-    {
++  ) {
+ #ifndef NO_LOCK
+-      std::lock_guard<std::shared_mutex> lock(lock_[physical_idx]);
++    std::lock_guard<std::shared_mutex> lock(lock_[physical_idx]);
+ #endif
+-      if (!entries_[physical_idx].IsValid())
+-        return false;
+-      entries_[physical_idx].Delete(clevel_mem_, key, value);
+-      size_.fetch_sub(1, std::memory_order_relaxed);
++    if (!entries_[physical_idx].IsValid())
++      return false;
++    entries_[physical_idx].Delete(clevel_mem_, key, value);
++    size_.fetch_sub(1, std::memory_order_relaxed);
+ #ifdef BRANGE
+-      interval_size->fetch_sub(1, std::memory_order_relaxed);
++    interval_size->fetch_sub(1, std::memory_order_relaxed);
+ #endif
+-      return true;
+-    }
++    return true;
++  }
+ 
+-    class IndexIter
+-    {
+-    public:
+-      using difference_type = ssize_t;
+-      using value_type = const uint64_t;
+-      using pointer = const uint64_t *;
+-      using reference = const uint64_t &;
+-      using iterator_category = std::random_access_iterator_tag;
++  class IndexIter {
++  public:
++    using difference_type = ssize_t;
++    using value_type = const uint64_t;
++    using pointer = const uint64_t *;
++    using reference = const uint64_t &;
++    using iterator_category = std::random_access_iterator_tag;
+ 
+-    public:
+-      IndexIter() {}
++  public:
++    IndexIter() {}
+ 
+-      IndexIter(const BLevel *blevel)
+-          : blevel_(blevel), idx_(0) {}
++    IndexIter(const BLevel *blevel) : blevel_(blevel), idx_(0) {}
+ 
+-      IndexIter(const BLevel *blevel, uint64_t idx)
+-          : blevel_(blevel), idx_(idx) {}
++    IndexIter(const BLevel *blevel, uint64_t idx)
++        : blevel_(blevel), idx_(idx) {}
+ 
+-      uint64_t operator*()
+-      {
+-        return blevel_->EntryKey(idx_);
+-      }
++    uint64_t operator*() { return blevel_->EntryKey(idx_); }
+ 
+-      IndexIter *operator->()
+-      {
+-        return this;
+-      }
++    IndexIter *operator->() { return this; }
+ 
+-      IndexIter &operator++()
+-      {
+-        idx_++;
+-        return *this;
+-      }
++    IndexIter &operator++() {
++      idx_++;
++      return *this;
++    }
+ 
+-      IndexIter operator++(int)
+-      {
+-        return IndexIter(blevel_, idx_++);
+-      }
++    IndexIter operator++(int) { return IndexIter(blevel_, idx_++); }
+ 
+-      IndexIter &operator--()
+-      {
+-        idx_--;
+-        return *this;
+-      }
++    IndexIter &operator--() {
++      idx_--;
++      return *this;
++    }
+ 
+-      IndexIter operator--(int)
+-      {
+-        return IndexIter(blevel_, idx_--);
+-      }
++    IndexIter operator--(int) { return IndexIter(blevel_, idx_--); }
+ 
+-      uint64_t operator[](size_t i) const
+-      {
+-        if ((i + idx_) > blevel_->nr_entries_)
+-        {
+-          std::cout << "索引超过最大值" << std::endl;
+-          // 返回第一个元素
+-          return blevel_->EntryKey(0);
+-        }
+-        return blevel_->EntryKey(i + idx_);
++    uint64_t operator[](size_t i) const {
++      if ((i + idx_) > blevel_->nr_entries_) {
++        std::cout << "索引超过最大值" << std::endl;
++        // 返回第一个元素
++        return blevel_->EntryKey(0);
+       }
++      return blevel_->EntryKey(i + idx_);
++    }
+ 
+-      IndexIter &operator+=(size_t __n)
+-      {
+-        idx_ += __n;
+-        return *this;
+-      }
++    IndexIter &operator+=(size_t __n) {
++      idx_ += __n;
++      return *this;
++    }
+ 
+-      IndexIter operator+(size_t __n)
+-      {
+-        return IndexIter(blevel_, idx_ + __n);
+-      }
++    IndexIter operator+(size_t __n) { return IndexIter(blevel_, idx_ + __n); }
+ 
+-      IndexIter &operator-=(size_t __n)
+-      {
+-        idx_ -= __n;
+-        return *this;
+-      }
++    IndexIter &operator-=(size_t __n) {
++      idx_ -= __n;
++      return *this;
++    }
+ 
+-      IndexIter operator-(size_t __n)
+-      {
+-        return IndexIter(blevel_, idx_ - __n);
+-      }
++    IndexIter operator-(size_t __n) { return IndexIter(blevel_, idx_ - __n); }
+ 
+-      bool operator<(const IndexIter &iter) const { return idx_ < iter.idx_; }
+-      bool operator==(const IndexIter &iter) const { return idx_ == iter.idx_ && blevel_ == iter.blevel_; }
+-      bool operator!=(const IndexIter &iter) const { return idx_ != iter.idx_ || blevel_ != iter.blevel_; }
+-      bool operator>(const IndexIter &iter) const { return idx_ < iter.idx_; }
+-      bool operator<=(const IndexIter &iter) const { return *this < iter || *this == iter; }
+-      bool operator>=(const IndexIter &iter) const { return *this > iter || *this == iter; }
+-      size_t operator-(const IndexIter &iter) const { return idx_ - iter.idx_; }
+-
+-      static size_t distance(const IndexIter &first, const IndexIter &last)
+-      {
+-        if (last.idx_ < first.idx_)
+-        {
+-          return 0;
+-        }
+-        return last.idx_ - first.idx_;
+-      }
++    bool operator<(const IndexIter &iter) const { return idx_ < iter.idx_; }
++    bool operator==(const IndexIter &iter) const {
++      return idx_ == iter.idx_ && blevel_ == iter.blevel_;
++    }
++    bool operator!=(const IndexIter &iter) const {
++      return idx_ != iter.idx_ || blevel_ != iter.blevel_;
++    }
++    bool operator>(const IndexIter &iter) const { return idx_ < iter.idx_; }
++    bool operator<=(const IndexIter &iter) const {
++      return *this < iter || *this == iter;
++    }
++    bool operator>=(const IndexIter &iter) const {
++      return *this > iter || *this == iter;
++    }
++    size_t operator-(const IndexIter &iter) const { return idx_ - iter.idx_; }
+ 
+-      static IndexIter prev(const IndexIter &now)
+-      {
+-        return IndexIter(now.blevel_, now.idx_ - 1);
++    static size_t distance(const IndexIter &first, const IndexIter &last) {
++      if (last.idx_ < first.idx_) {
++        return 0;
+       }
++      return last.idx_ - first.idx_;
++    }
+ 
+-      static IndexIter next(const IndexIter &now)
+-      {
+-        return IndexIter(now.blevel_, now.idx_ + 1);
+-      }
++    static IndexIter prev(const IndexIter &now) {
++      return IndexIter(now.blevel_, now.idx_ - 1);
++    }
+ 
+-      const IndexIter &base()
+-      {
+-        return *this;
+-      }
++    static IndexIter next(const IndexIter &now) {
++      return IndexIter(now.blevel_, now.idx_ + 1);
++    }
+ 
+-    private:
+-      const BLevel *blevel_;
+-      uint64_t idx_;
+-    }; // End of BLevel Iter
+-  };   // End of blevel
++    const IndexIter &base() { return *this; }
++
++  private:
++    const BLevel *blevel_;
++    uint64_t idx_;
++  }; // End of BLevel Iter
++}; // End of blevel
+ 
+-}
+\ No newline at end of file
++} // namespace letree
+diff --git a/src/letree.h b/src/letree.h
+index 294293a..34193f4 100644
+--- a/src/letree.h
++++ b/src/letree.h
+@@ -13,7 +13,7 @@
+ #include "debug.h"
+ #include <pthread.h>
+ 
+-// #define MULTI_THREAD // comment this line for single thread operation
++#define MULTI_THREAD // comment this line for single thread operation
+ 
+ namespace letree
+ {
+@@ -833,6 +833,9 @@ namespace letree
+         pthread_mutex_lock(&lock_space[group_id]);
+ #endif
+         auto ret = group_space[group_id].Update(clevel_mem_, key, value);
++#ifdef MULTI_THREAD
++        pthread_mutex_unlock(&lock_space[group_id]);
++#endif
+         return ret;
+     }
+ 
+diff --git a/test/example.cc b/test/example.cc
+index 597d11a..57bccc3 100644
+--- a/test/example.cc
++++ b/test/example.cc
+@@ -7,122 +7,149 @@ using ycsbc::KvDB;
+ using namespace dbInter;
+ using namespace std;
+ 
+-void show_help(char *prog)
+-{
+-  cout << "Usage: " << prog << " [options]" << endl
+-       << endl
+-       << "  Option:" << endl
+-       << "    --load-size              LOAD_SIZE" << endl
+-       << "    --put-size               PUT_SIZE" << endl
+-       << "    --get-size               GET_SIZE" << endl
+-       << "    --help[-h]               show help" << endl;
+-}
++enum OperationType {
++    INSERT,
++    UPDATE,
++    GET,
++    DELETE,
++    RANGE,
++    PRINT
++};
++
++std::map<char, OperationType> operation_type_map = {
++    {'i', OperationType::INSERT},
++    {'u', OperationType::UPDATE},
++    {'s', OperationType::GET},
++    {'d', OperationType::DELETE},
++    {'r', OperationType::RANGE},
++    {'p', OperationType::PRINT}
++};
++
++struct Operation {
++    OperationType type;
++    uint64_t key;
++    uint64_t value;
++};
++
++struct Workload {
++    std::vector<Operation> ops;
++
++    Workload(char * filename) {
++        std::ifstream input(filename);
++
++        if(!input) {
++            std::cerr << "Error opening input file" << std::endl;
++            return;
++        }
++
++        char op_c = 'i';
++        uint64_t key = 0;
++        uint64_t value = 0;
++
++        while(!input.eof()) {
++            input >> op_c;
++            input.ignore(1);
++            if(op_c != 'p') {
++              input >> key;
++              input.ignore(1);
++            }
++
++            if(input.eof())
++              break;
++            if(op_c == 'i' || op_c == 'u') {
++                input >> value;
++                input.ignore(1);
++            }
++
++            Operation op = {operation_type_map[op_c], key, value};
++            ops.push_back(op);
++        }
++    }
++};
+ 
+-vector<uint64_t> generate_uniform_random(size_t op_num)
+-{
+-  vector<uint64_t> data;
+-  data.resize(op_num);
+-  const uint64_t ns = util::timing([&]
+-                                   {
+-                                     Random rnd(0, UINT64_MAX);
+-                                     for (size_t i = 0; i < op_num; ++i)
+-                                     {
+-                                       data[i] = rnd.Next();
+-                                     } });
+-
+-  const uint64_t ms = ns / 1e6;
+-  cout << "generate " << data.size() << " values in "
+-       << ms << " ms (" << static_cast<double>(data.size()) / 1000 / ms
+-       << " M values/s)" << endl;
+-  return data;
+-}
+ 
+ int main(int argc, char *argv[])
+ {
+-  int thread_num = 1;
+-  size_t LOAD_SIZE = 10000000;
+-  size_t PUT_SIZE = 10000000;
+-  size_t GET_SIZE = 10000000;
+-
+-  static struct option opts[] = {
+-      /* NAME               HAS_ARG            FLAG  SHORTNAME*/
+-      {"load-size", required_argument, NULL, 0},
+-      {"put-size", required_argument, NULL, 0},
+-      {"get-size", required_argument, NULL, 0},
+-      {"help", no_argument, NULL, 'h'},
+-      {NULL, 0, NULL, 0}};
+-
+-  // parse arguments
++  // Parsing arguments
++  int numData = 0;
++  int n_threads = 1;
++  char *input_path = (char *)std::string("../sample_input.txt").data();
++  char *persistent_path;
++
+   int c;
+-  int opt_idx;
+-  string load_file = "";
+-  while ((c = getopt_long(argc, argv, "n:dh", opts, &opt_idx)) != -1)
+-  {
+-    switch (c)
+-    {
+-    case 0:
+-      switch (opt_idx)
+-      {
+-      case 0:
+-        LOAD_SIZE = atoi(optarg);
+-        break;
+-      case 1:
+-        PUT_SIZE = atoi(optarg);
+-        break;
+-      case 2:
+-        GET_SIZE = atoi(optarg);
+-        break;
+-      case 'h':
+-        show_help(argv[0]);
+-        return 0;
+-      default:
+-        cout << (char)c << endl;
+-        abort();
+-      }
++  while ((c = getopt(argc, argv, "n:w:t:i:p:")) != -1) {
++    switch (c) {
++    case 't':
++      n_threads = atoi(optarg);
++      break;
++    case 'i':
++      input_path = optarg;
++      break;
++    case 'p':
++      persistent_path = optarg;
++      break;
++    default:
++      break;
+     }
+   }
+-  cout << "LOAD_SIZE:             " << LOAD_SIZE << endl;
+-  cout << "PUT_SIZE:              " << PUT_SIZE << endl;
+-  cout << "GET_SIZE:              " << GET_SIZE << endl;
+ 
+-  vector<uint64_t> data_base = generate_uniform_random(LOAD_SIZE + PUT_SIZE * 10);
+   NVM::env_init();
+   KvDB *db = new LetDB();
+   db->Init();
+-  uint64_t load_pos = 0;
+-  // load
+-  cout << "start loading ...." << endl;
+-  util::FastRandom ranny(18);
+-  for (load_pos; load_pos < LOAD_SIZE; load_pos++)
+-  {
+-    db->Put(data_base[load_pos], (uint64_t)data_base[load_pos]);
+-  }
+-  load_pos = LOAD_SIZE;
+-  // test put
+-  for (int i = 0; i < PUT_SIZE; i++)
+-  {
+-    db->Put(data_base[load_pos], (uint64_t)data_base[load_pos]);
+-    load_pos++;
+-  }
+-  cout << "test put " << PUT_SIZE << " kvs." << endl;
+-  // test get
+-  vector<uint64_t> rand_pos;
+-  for (uint64_t i = 0; i < GET_SIZE; i++)
+-  {
+-    rand_pos.push_back(ranny.RandUint32(0, load_pos - 1));
+-  }
+ 
+-  int wrong_get = 0;
+-  uint64_t value = 0;
+-  for (uint64_t i = 0; i < GET_SIZE; i++)
+-  {
+-    db->Get(data_base[rand_pos[i]], value);
+-    if (value != data_base[rand_pos[i]])
+-    {
+-      wrong_get++;
+-    }
++  Workload workload(input_path);
++  numData = workload.ops.size();
++  std::cerr << "Workload: " << numData << " ops" << std::endl;
++
++  // Multithreading
++  vector<future<void>> futures(n_threads);
++
++  long data_per_thread = numData / n_threads;
++
++  for (int tid = 0; tid < n_threads; tid++) {
++    int from = data_per_thread * tid;
++    int to = (tid == n_threads - 1) ? numData : from + data_per_thread;
++
++    auto f = async(launch::async,
++                   [&db, &workload](int from, int to) {
++                     std::vector<std::pair<uint64_t, uint64_t>> buf;
++                     uint64_t res;
++                     for (int i = from; i < to; ++i) {
++                       Operation & op = workload.ops[i];
++
++                       switch(op.type) {
++                        case OperationType::INSERT:
++                          db->Put(op.key, op.value);
++                          break;
++                        case OperationType::UPDATE:
++                          db->Update(op.key, op.value);
++                          break;
++
++                        case OperationType::GET:
++                          db->Get(op.key, res);
++                          break;
++
++                        case OperationType::DELETE:
++                          db->Delete(op.key);
++                          break;
++                        case OperationType::RANGE:
++                          buf.clear();
++                          db->Scan(op.key, op.value, buf);
++                          break;
++
++                        case OperationType::PRINT:
++                          db->PrintStatic();
++                          break;
++                        }
++                     }
++                   },
++                   from, to);
++    futures.push_back(move(f));
+   }
+-  cout << "test get " << GET_SIZE << " kvs, with " << wrong_get << " wrong value." << endl;
++
++  for (auto &&f : futures)
++    if (f.valid())
++      f.get();
+ 
+   delete db;
+   NVM::env_exit();

@@ -1,0 +1,6 @@
+cmap,4957,$CMAP$,1
+stree,5020,$STREE$,-0.7
+Hashtable,8523,$HASHTABLE$,1
+LfHashtable,9364,$LFHASHTABLE$,1
+Redis,56645,$REDIS$,1
+RocksDB,163593,$ROCKSDB$,1

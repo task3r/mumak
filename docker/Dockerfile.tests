@@ -1,0 +1,8 @@
+ARG BASE="mumak:1.12.1"
+FROM ${BASE}
+
+COPY tests /tests
+WORKDIR /tests
+
+RUN make clean && make
+

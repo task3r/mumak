@@ -1,5 +1,8 @@
+*.patched
 results/
 tools/
+dots
+*.dot
 
 #.vscode
 *tags
@@ -33,6 +36,7 @@ tags
 
 *.eps
 
+.idea
 .vagrant
 vm-scripts/custom.sh
 *.ccls-cache/

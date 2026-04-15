@@ -1,0 +1,782 @@
+diff --git a/third_party/RECIPE/P-ART/CMakeLists.txt b/third_party/RECIPE/P-ART/CMakeLists.txt
+index 40fc046..ce1986e 100644
+--- a/third_party/RECIPE/P-ART/CMakeLists.txt
++++ b/third_party/RECIPE/P-ART/CMakeLists.txt
+@@ -10,7 +10,7 @@ else()
+     message(STATUS "Build type is set to ${CMAKE_BUILD_TYPE}")
+ endif()
+ 
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -march=native -mrtm -mcx16 -mavx -mavx2 -mbmi2 -mlzcnt -Wno-deprecated-declarations -Wall -Wextra -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -faligned-new=64 -DNDEBUG -g")
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -march=native -mrtm -mcx16 -mavx -mavx2 -mbmi2 -mlzcnt -Wno-deprecated-declarations -Wall -Wextra -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -faligned-new=64 -O0 -g")
+ 
+ execute_process(COMMAND cat /proc/cpuinfo COMMAND grep clflush OUTPUT_VARIABLE ENABLE_CLFLUSH)
+ execute_process(COMMAND cat /proc/cpuinfo COMMAND grep clflushopt OUTPUT_VARIABLE ENABLE_CLFLUSHOPT)
+@@ -37,6 +37,7 @@ find_library(TbbLib tbb)
+ 
+ set(INDEX_FILES Tree.cpp pmdk.cpp)
+ 
++
+ add_library(part ${INDEX_FILES})
+ target_link_libraries(part ${JemallocLib} ${TbbLib}
+ 	pmem pmemobj
+@@ -45,8 +46,13 @@ target_link_libraries(part ${JemallocLib} ${TbbLib}
+ set(P_ART_TEST example.cpp Epoche.cpp)
+ add_executable(example ${P_ART_TEST})
+ 
+-target_link_libraries(example part atomic boost_system boost_thread
++
++set(THREADS_PREFER_PTHREAD_FLAG ON)
++find_package(Threads REQUIRED)
++
++target_link_libraries(example PUBLIC part atomic boost_system boost_thread
+ 	pmem pmemobj)
++target_link_libraries(example PRIVATE Threads::Threads)
+ 
+ INSTALL(TARGETS part
+ 	ARCHIVE DESTINATION ${CMAKE_SOURCE_DIR}/../../../liboutput/
+diff --git a/third_party/RECIPE/P-ART/N.h b/third_party/RECIPE/P-ART/N.h
+index d59abe0..c850a13 100644
+--- a/third_party/RECIPE/P-ART/N.h
++++ b/third_party/RECIPE/P-ART/N.h
+@@ -47,7 +47,7 @@ namespace ART_ROWEX {
+     void lock_initialization();
+ #endif
+     class N {
+-    protected:
++    public:
+         N(NTypes type, uint32_t level, const uint8_t *prefix, uint32_t prefixLength) : level(level) {
+             setType(type);
+             setPrefix(prefix, prefixLength, false);
+diff --git a/third_party/RECIPE/P-ART/example.cpp b/third_party/RECIPE/P-ART/example.cpp
+index 9beddaa..4d2441a 100644
+--- a/third_party/RECIPE/P-ART/example.cpp
++++ b/third_party/RECIPE/P-ART/example.cpp
+@@ -7,70 +7,163 @@ using namespace std;
+ 
+ #include "Tree.h"
+ 
++#include <map>
++#include <fstream>
++#include <thread>
++#include <string.h>
++
++enum OperationType {
++    INSERT,
++    UPDATE,
++    GET,
++    DELETE,
++    RANGE,
++    PRINT
++};
++
++std::map<char, OperationType> operation_type_map = {
++    {'i', OperationType::INSERT},
++    {'u', OperationType::UPDATE},
++    {'s', OperationType::GET},
++    {'d', OperationType::DELETE},
++    {'r', OperationType::RANGE},
++    {'p', OperationType::PRINT}
++};
++
++struct Operation {
++    OperationType type;
++    char * key;
++    char * value;
++};
++
++struct Workload {
++    std::vector<Operation> ops;
++
++    Workload(char * filename) {
++        std::ifstream input(filename);
++
++        if(!input) {
++            std::cerr << "Error opening input file" << std::endl;
++            return;
++        }
++
++        while(true) {
++            char * line = new char[512];
++            input.getline(line, 512);
++            if(input.eof())
++                break;
++
++            ops.push_back({operation_type_map[strtok(line, ";")[0]], strtok(nullptr, ";"), strtok(nullptr, ";")});
++        }
++    }
++};
++
+ void loadKey(TID tid, Key &key) {
+     return ;
+ }
+ 
+ int main(int argc, char **argv) {
+-    char *path = "/mnt/pmem0/p_art";
+-    size_t size_in_mb = 1024;
+-    if (argc != 3) {
+-	printf("usage : %s nData(integer) read/write(read_only=1,write=0)\n");		
++    int numData = 0;
++    int n_threads = 1;
++    uint64_t size = 8;
++    char *input_path = NULL;
++    char *persistent_path;
++
++    int c;
++    while ((c = getopt(argc, argv, "n:w:t:i:p:s:")) != -1) {
++        switch (c) {
++        case 't':
++            n_threads = atoi(optarg);
++            break;
++        case 'i':
++            input_path = optarg;
++            break;
++        case 'p':
++            persistent_path = optarg;
++            break;
++        case 's':
++            size = atoi(optarg);
++            break;
++        default:
++            break;
++        }
+     }
+-    ART_ROWEX::Tree *tree = ART_ROWEX::init_P_ART(path,size_in_mb,"p_art");
+-//    auto t = tree->getThreadInfo();
+ 
++    ART_ROWEX::Tree *tree = ART_ROWEX::init_P_ART(persistent_path, size,"p_art");
++    auto t = tree->getThreadInfo();
+ 
+-    ART_ROWEX::Tree tt(loadKey); // Dummy tree to get the threadinfo.. Need to talk with Xinwei
+-    auto t = tt.getThreadInfo();
+-    printf("%p\n",tree);
++    if(input_path == NULL) {
++        std::cerr << "No input path provided" << std::endl;
++        return 1;
++    }
+ 
+-    uint64_t n = std::atoll(argv[1]);
+-    int read_only = std::atoi(argv[2]);
+-    uint64_t *keys = new uint64_t[n];
+-    std::vector<Key *> Keys;
++    Workload workload(input_path);
+ 
+-    Keys.reserve(n);
+-    printf("here?\n");
+- //   auto t = tt.getThreadInfo();
++    numData = workload.ops.size();
+ 
+-    // Generate keys
+-    for (uint64_t i = 0; i < n; i++) {
+-        keys[i] = i + 1;
+-    }
++    std::cerr << "Workload: " << numData << " ops" << std::endl;
+ 
+-    //Insert
+-    if(read_only == 0){
+-	printf("insert \n");
+-        for (uint64_t i = 0; i < n; i++) {
+-   	     Keys[i] = Keys[i]->make_leaf(keys[i], sizeof(uint64_t), keys[i]);
+-	     tree->insert(Keys[i], t);
+-    	}
+-    }
+-    
+-    
+-    if(read_only == 1){
+-	for (uint64_t i = 0; i < n; i++) {
+-		Keys[i] = Keys[i]->make_leaf(keys[i], sizeof(uint64_t), keys[i]);
+-    	}
+-    }
+-    //Read Keys from pool
+-    for (uint64_t i = 0; i < n; i++) {
+-        uint64_t *val = reinterpret_cast<uint64_t *> (tree->lookup(Keys[i], t));
+-
+-	printf("*ret[%lu] :%lu keys[%lu]:%lu\n",i,*(uint64_t*)val,i,keys[i]);
+-        if (*val != keys[i]) {
+-              std::cout << "wrong value read: " << *val << " expected:" << keys[i] << std::endl;
+-              throw;
+-        }
+-    }
+-    
+ 
+-/*    if (argc != 3) {
+-        printf("usage: %s [n] [nthreads]\nn: number of keys (integer)\nnthreads: number of threads (integer)\n", argv[0]);
+-        return 1;
++    std::atomic<int> next_thread_id;
++
++    {
++        // Run
++        next_thread_id.store(0);
++        auto func = [&]() {
++            int thread_id = next_thread_id.fetch_add(1);
++
++            for (int i = thread_id; i < numData; i+= n_threads) {
++                Operation & op = workload.ops[i];
++
++                Key* key;
++                Key* key_min;
++                Key* key_max;
++
++                Key *continueKey = NULL;
++                Key *results[2048];
++                size_t resultsFound = 0;
++
++                switch(op.type) {
++                case OperationType::INSERT:
++                case OperationType::UPDATE:
++                    std::cerr << "insert/update" << std::endl;
++                    key = key->make_leaf(op.key, strlen(op.key), (uint64_t)op.value);
++                    tree->insert(key, t);
++                    break;
++
++                case OperationType::GET:
++                    std::cerr << "get" << std::endl;
++                    key = key->make_leaf(op.key, strlen(op.key), 0);
++                    tree->lookup(key, t);
++                    break;
++
++                case OperationType::DELETE:
++                    std::cerr << "delete" << std::endl;
++                    key = key->make_leaf(op.key, strlen(op.key), 0);
++                    tree->remove(key, t);
++                    break;
++
++                case OperationType::RANGE:
++                    std::cerr << "range" << std::endl;
++                    key_min = key->make_leaf(op.key, strlen(op.key), 0);
++                    key_max = key->make_leaf(op.value, strlen(op.key), 0);
++                    tree->lookupRange(key_min, key_max, continueKey, results, 2048, resultsFound, t);
++                    break;
++
++                case OperationType::PRINT:
++                    break;
++                }                
++            }
++        };
++
++        std::vector<std::thread> thread_group;
++
++        for (int i = 0; i < n_threads; i++)
++            thread_group.push_back(std::thread{func});
++
++        for (int i = 0; i < n_threads; i++)
++            thread_group[i].join();
+     }
+ 
+-   // run(argv);*/
+     return 0;
+ }
+diff --git a/third_party/RECIPE/P-HOT/CMakeLists.txt b/third_party/RECIPE/P-HOT/CMakeLists.txt
+index dd2a046..ff381fa 100644
+--- a/third_party/RECIPE/P-HOT/CMakeLists.txt
++++ b/third_party/RECIPE/P-HOT/CMakeLists.txt
+@@ -10,7 +10,7 @@ else()
+     message(STATUS "Build type is set to ${CMAKE_BUILD_TYPE}")
+ endif()
+ 
+-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -march=native -mrtm -mcx16 -mavx -mavx2 -mbmi2 -mlzcnt -Wno-deprecated-declarations -Wall -Wextra -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -faligned-new=64 -DNDEBUG")
++set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -march=native -mrtm -mcx16 -mavx -mavx2 -mbmi2 -mlzcnt -Wno-deprecated-declarations -Wall -Wextra -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -faligned-new=64 -O0 -g")
+ 
+ execute_process(COMMAND cat /proc/cpuinfo COMMAND grep clflush OUTPUT_VARIABLE ENABLE_CLFLUSH)
+ execute_process(COMMAND cat /proc/cpuinfo COMMAND grep clflushopt OUTPUT_VARIABLE ENABLE_CLFLUSHOPT)
+diff --git a/third_party/RECIPE/P-HOT/example.cpp b/third_party/RECIPE/P-HOT/example.cpp
+index fdaba0d..8975406 100644
+--- a/third_party/RECIPE/P-HOT/example.cpp
++++ b/third_party/RECIPE/P-HOT/example.cpp
+@@ -9,6 +9,62 @@ using namespace std;
+ #include <idx/contenthelpers/IdentityKeyExtractor.hpp>
+ #include <idx/contenthelpers/OptionalValue.hpp>
+ 
++
++#include <map>
++#include <fstream>
++#include <thread>
++#include <string.h>
++
++enum OperationType {
++    INSERT,
++    UPDATE,
++    GET,
++    DELETE,
++    RANGE,
++    PRINT
++};
++
++std::map<char, OperationType> operation_type_map = {
++    {'i', OperationType::INSERT},
++    {'u', OperationType::UPDATE},
++    {'s', OperationType::GET},
++    {'d', OperationType::DELETE},
++    {'r', OperationType::RANGE},
++    {'p', OperationType::PRINT}
++};
++
++struct Operation {
++    OperationType type;
++    uint64_t key;
++    uintptr_t value;
++};
++
++struct Workload {
++    std::vector<Operation> ops;
++
++    Workload(char * filename) {
++        std::ifstream input(filename);
++
++        if(!input) {
++            std::cerr << "Error opening input file" << std::endl;
++            return;
++        }
++
++        while(true) {
++            char * line = new char[512];
++            input.getline(line, 512);
++            if(input.eof())
++                break;
++
++            OperationType op_t = operation_type_map[strtok(line, ";")[0]];
++            char * k = strtok(nullptr, ";");
++
++            ops.push_back({op_t, (k ? atol(k) : 0) , (uintptr_t) strtok(nullptr, ";")});
++        }
++    }
++};
++
++
+ typedef struct IntKeyVal {
+     uint64_t key;
+     uintptr_t value;
+@@ -49,105 +105,100 @@ TreeType *init_P_HOT(char *path,
+ }
+ 
+ int main(int argc, char **argv) {
+-    char *path = "/mnt/pmem0/p_hot";
+-    size_t size_in_mb = 1024;
+-    if (argc != 3) {
+-	printf("usage : %s nData(integer) read/write(read_only=1,write=0)\n");		
++    int numData = 0;
++    int n_threads = 1;
++    uint64_t size = 8;
++    char *input_path = NULL;
++    char *persistent_path;
++
++    int c;
++    while ((c = getopt(argc, argv, "n:w:t:i:p:s:")) != -1) {
++        switch (c) {
++        case 't':
++            n_threads = atoi(optarg);
++            break;
++        case 'i':
++            input_path = optarg;
++            break;
++        case 'p':
++            persistent_path = optarg;
++            break;
++        case 's':
++            size = atoi(optarg);
++            break;
++        default:
++            break;
++        }
+     }
+-
+-    auto mTrie = init_P_HOT(path,size_in_mb,"p_hot");
++    char name[10] = "p_hot"; 
++    auto mTrie = init_P_HOT(persistent_path, size, name);
+     printf("mTrie:%p\n",mTrie);
+ 
+-    uint64_t n = std::atoll(argv[1]);
+-    int read_only = std::atoi(argv[2]);
+-    uint64_t *keys = new uint64_t[2*n];
+-
+- //   auto t = tt.getThreadInfo();
+-
+-    // Generate keys
+-    for (uint64_t i = 0; i < 2*n; i++) {
+-        keys[i] = i + 1;
++    if(input_path == NULL) {
++        std::cerr << "No input path provided" << std::endl;
++        return 1;
+     }
+ 
+-    //Insert
+-    if(read_only == 0){
+-	printf("insert \n");
+-        for (uint64_t i = 0; i < n; i++) {
+-            IntKeyVal *key;
+-            nvm_aligned_alloc((void **)&key, 64, sizeof(IntKeyVal));
+-            key->key = keys[i];
+-            key->value = keys[i];
+-            if (!(mTrie->insert(key))) {
+-                fprintf(stderr, "[HOT] insert faile\n");
+-                exit(1);
++    Workload workload(input_path);
++
++    numData = workload.ops.size();
++
++    std::cerr << "Workload: " << numData << " ops" << std::endl;
++
++    std::atomic<int> next_thread_id;
++
++    {
++        // Run
++        next_thread_id.store(0);
++        auto func = [&]() {
++            int thread_id = next_thread_id.fetch_add(1);
++
++            for (int i = thread_id; i < numData; i+= n_threads) {
++                Operation & op = workload.ops[i];
++
++                IntKeyVal *key;
++                idx::contenthelpers::OptionalValue<IntKeyVal *> result;
++                
++                switch(op.type) {
++                case OperationType::INSERT:
++                    nvm_aligned_alloc((void **)&key, 64, sizeof(IntKeyVal));
++                    key->key = op.key;
++                    key->value = op.value;
++                    mTrie->insert(key);
++                    break;
++
++                case OperationType::UPDATE:
++                    nvm_aligned_alloc((void **)&key, 64, sizeof(IntKeyVal));
++                    key->key = op.key;
++                    key->value = op.value;
++                    mTrie->upsert(key);
++                    break;
++                    
++                case OperationType::GET:
++                    mTrie->lookup(op.key);
++                    break;
++
++                case OperationType::DELETE:
++                    break;
++
++                case OperationType::RANGE:
++                    result = mTrie->scan(op.key, (size_t) op.value);
++                    break;
++
++                case OperationType::PRINT:
++                    break;
++                }                
+             }
+-	    printf("key[%d] :%lu inserted\n",i,keys[i]);
+-    	}
+-    }
+-    if(read_only == 0){
+-         for (uint64_t i = 0; i < n; i++) {
+-              idx::contenthelpers::OptionalValue<IntKeyVal *> result = mTrie->lookup(keys[i]);
+-              if (!result.mIsValid || result.mValue->value != keys[i]) {
+-                   printf("mIsValid = %d\n", result.mIsValid);
+-                   printf("Return value = %lu, Correct value = %lu\n", result.mValue->value, keys[i]);
+-                   exit(1);
+-              }
+-        	 printf("key[%d] :%lu inserted\n",i,result.mValue->value);
+-    	
+-         }
+-    }
+- 
+-    uint64_t update_value =1000000;
+-    if(read_only == 1){
+-         for (uint64_t i = n; i < 2*n; i++) {
+-             IntKeyVal *key;
+-             nvm_aligned_alloc((void **)&key, 64, sizeof(IntKeyVal));
+-             key->key = keys[i];
+-             key->value = keys[i];
+-	     if (!(mTrie->insert(key))) {
+-                fprintf(stderr, "[HOT] insert faile\n");
+-                exit(1);
+-             }
+-	 }
+-    }
+-//    uint64_t update_value =0;
+-    if(read_only == 1){
+-         for (uint64_t i = 0; i < n; i++) {
+-             IntKeyVal *key;
+-             nvm_aligned_alloc((void **)&key, 64, sizeof(IntKeyVal));
+-             key->key = keys[i];
+-             key->value = keys[i]+update_value;
+-             idx::contenthelpers::OptionalValue<IntKeyVal *> result = mTrie->upsert(key);
+-        	if (!result.mIsValid){
+-         		printf("Return value = %lu, Correct value = %lu\n", result.mValue->value, keys[i]);
+-	       }
+-	 }
+-    }
++        };
+ 
+-    //Read Keys from pool
+-    printf("read\n");
+-    if(read_only==1){
+-	    for (uint64_t i = 0; i < 2*n; i++) {
+-       		  idx::contenthelpers::OptionalValue<IntKeyVal *> result = mTrie->lookup(keys[i]);
+-
+-		  uint64_t expected_result = 0;
+-		  if(i<n) expected_result = keys[i]+update_value;
+-		  else expected_result = keys[i]; 
+-       		  if (!result.mIsValid || result.mValue->value != expected_result) {
+-               		 printf("mIsValid = %d\n", result.mIsValid);
+-	                printf("Return value = %lu, Correct value = %lu\n", result.mValue->value, expected_result);
+-       		         exit(1);
+-	         }
+-		 printf("key[%d] :%lu inserted\n",i,result.mValue->value);
+-	    }	
+-    }
+-    //scan 
++        std::vector<std::thread> thread_group;
++
++        for (int i = 0; i < n_threads; i++)
++            thread_group.push_back(std::thread{func});
+ 
+-    idx::contenthelpers::OptionalValue<IntKeyVal *> result = mTrie->scan(keys[0], n/2);
+-    if(read_only==0)
+-	    printf("Start Key :  %lu, range : %d Last Key in the results :%lu expected value: %lu\n",keys[0], n/2, result.mValue->value, keys[n/2]); 
+-    else
+-	    printf("Start Key :  %lu, range : %d Last Key in the results :%lu expected value: %lu\n",keys[0], n/2, result.mValue->value, keys[n/2]+update_value); 
++        for (int i = 0; i < n_threads; i++)
++            thread_group[i].join();
++    }
+ 
+     return 0;
+ }
+diff --git a/third_party/RECIPE/P-HOT/libs/hot/rowex/include/hot/rowex/HOTRowexNodeInterface.hpp b/third_party/RECIPE/P-HOT/libs/hot/rowex/include/hot/rowex/HOTRowexNodeInterface.hpp
+index 3c4695c..5c8205b 100644
+--- a/third_party/RECIPE/P-HOT/libs/hot/rowex/include/hot/rowex/HOTRowexNodeInterface.hpp
++++ b/third_party/RECIPE/P-HOT/libs/hot/rowex/include/hot/rowex/HOTRowexNodeInterface.hpp
+@@ -194,14 +194,14 @@ public:
+ 	//Move to here..
+ 	inline hot::commons::InsertInformation getInsertInformation(uint entryIndex, hot::commons::DiscriminativeBit const & discriminativeBit) const{
+ 		PartialKeyType existingEntryMask = mPartialKeys.mEntries[entryIndex];
+-	assert(([&]() -> bool {
++/*	assert(([&]() -> bool {
+ 		uint resultIndex = this->toResultIndex(mPartialKeys.search(existingEntryMask));
+ 		bool isCorrectResultIndex = resultIndex == entryIndex;
+ 		if(!isCorrectResultIndex) {
+ 			reportInvalidResultIndex(resultIndex, entryIndex);
+ 		};
+ 		return isCorrectResultIndex;
+-	})());
++	})());*/
+ 
+ 	PartialKeyType prefixBits = mDiscriminativeBitsRepresentation.template getPrefixBitsMask<PartialKeyType>(discriminativeBit);
+ 	PartialKeyType subtreePrefixMask = existingEntryMask & prefixBits;
+diff --git a/third_party/RECIPE/P-Masstree/CMakeLists.txt b/third_party/RECIPE/P-Masstree/CMakeLists.txt
+index bd4af98..aee3052 100644
+--- a/third_party/RECIPE/P-Masstree/CMakeLists.txt
++++ b/third_party/RECIPE/P-Masstree/CMakeLists.txt
+@@ -32,8 +32,12 @@ endif()
+ 
+ find_library(JemallocLib jemalloc pmemobj)
+ find_library(TbbLib tbb)
++set(THREADS_PREFER_PTHREAD_FLAG ON)
++find_package(Threads REQUIRED)
++
+ 
+ set(P_MASS_TEST example.cpp pmdk.cpp)
+ add_executable(example ${P_MASS_TEST})
+ 
+-target_link_libraries(example ${JemallocLib} ${TbbLib} atomic boost_system boost_thread pmemobj)
++target_link_libraries(example PUBLIC ${JemallocLib} ${TbbLib} atomic boost_system boost_thread pmemobj)
++target_link_libraries(example PRIVATE Threads::Threads)
+\ No newline at end of file
+diff --git a/third_party/RECIPE/P-Masstree/example.cpp b/third_party/RECIPE/P-Masstree/example.cpp
+index d35c729..ea5bf03 100644
+--- a/third_party/RECIPE/P-Masstree/example.cpp
++++ b/third_party/RECIPE/P-Masstree/example.cpp
+@@ -60,61 +60,154 @@ using namespace std;
+     delete[] keys;
+ }*/
+ 
+-int main(int argc, char **argv) {
+ 
+-    char *path = "/mnt/pmem0/p_mt";
+-    size_t size_in_mb = 1024;
+-    if (argc != 3) {
+-	printf("usage : %s nData(integer) read/write(read_only=1,write=0)\n");		
+-	return 1;
+-    }
+-    masstree::masstree *tree = masstree::init_P_MASSTREE(path,size_in_mb,"p_mtt");
+-    printf("%p\n",tree);
++#include <map>
++#include <fstream>
++#include <thread>
++#include <string.h>
++
++enum OperationType {
++    INSERT,
++    UPDATE,
++    GET,
++    DELETE,
++    RANGE,
++    PRINT
++};
++
++std::map<char, OperationType> operation_type_map = {
++    {'i', OperationType::INSERT},
++    {'u', OperationType::UPDATE},
++    {'s', OperationType::GET},
++    {'g', OperationType::GET},
++    {'d', OperationType::DELETE},
++    {'r', OperationType::RANGE},
++    {'p', OperationType::PRINT}
++};
++
++struct Operation {
++    OperationType type;
++    uint64_t key;
++    uint64_t value;
++};
++
++struct Workload {
++    std::vector<Operation> ops;
++
++    Workload(char * filename) {
++        std::ifstream input(filename);
++
++        if(!input) {
++            std::cerr << "Error opening input file" << std::endl;
++            return;
++        }
+ 
+-    uint64_t n = std::atoll(argv[1]);
+-    uint64_t *keys = new uint64_t[2*n];
+-    int read_after_re_execute= std::atoi(argv[2]);
++        while(true) {
++            char * line = new char[512];
++            input.getline(line, 512);
++            if(input.eof())
++                break;
+ 
+-    // Generate keys
+-    for (uint64_t i = 0; i < 2*n; i++) {
+-        keys[i] = 2*i+ 1;
+-    }
++            char op = strtok(line, ";")[0];
++            char * key = strtok(nullptr, ";");
++            char * val = strtok(nullptr, ";");
+ 
+-    if(!read_after_re_execute){
+-	printf("insert \n");
+-	for (uint64_t i = 0; i < n; i++) {
+-       	    tree->put(keys[i], (void*)keys[i]);
+-    	}
++            ops.push_back({operation_type_map[op], key ? atoi(key) : 0, val ? atoi(val) : 0});
++        }
+     }
++};
+ 
+-    for (uint64_t i = 0; i < n; i++) {
+-        uint64_t ret = reinterpret_cast<uint64_t> (tree->get(keys[i]));
+-	printf("*ret[%lu] :%lu keys[%lu]:%lu\n",i,(uint64_t)ret,i,keys[i]);
+-        if (ret != keys[i]) {
+-            std::cout << "wrong value read: " << ret << " expected:" << keys[i] << std::endl;
+-            throw;
++int main(int argc, char **argv) {
++    int numData = 0;
++    int n_threads = 1;
++    uint64_t size = 8;
++    char *input_path = NULL;
++    char *persistent_path;
++
++    int c;
++    while ((c = getopt(argc, argv, "n:w:t:i:p:s:")) != -1) {
++        switch (c) {
++        case 't':
++            n_threads = atoi(optarg);
++            break;
++        case 'i':
++            input_path = optarg;
++            break;
++        case 'p':
++            persistent_path = optarg;
++            break;
++        case 's':
++            size = atoi(optarg);
++            break;
++        default:
++            break;
+         }
+     }
+-    
+-    // when n is 100, this example will not work without recovery function.
+-    if(read_after_re_execute){
+-	printf("insert \n");
+-	for (uint64_t i = n; i < 2*n; i++) {
+-       	    tree->put(keys[i], (void*)keys[i]);
+-    	}
++
++    masstree::masstree *tree = masstree::init_P_MASSTREE(persistent_path,size,"p_mtt");
++
++    if(input_path == NULL) {
++        std::cerr << "No input path provided" << std::endl;
++        return 1;
+     }
+-    if(read_after_re_execute){
+-        for (uint64_t i = 0; i < 2*n; i++) {
+-            uint64_t ret = reinterpret_cast<uint64_t> (tree->get(keys[i]));
+-            printf("*ret[%lu] :%lu keys[%lu]:%lu\n",i,(uint64_t)ret,i,keys[i]);
+-            if (ret != keys[i]) {
+-                std::cout << "wrong value read: " << ret << " expected:" << keys[i] << std::endl;
+-                throw;
++
++    Workload workload(input_path);
++
++    numData = workload.ops.size();
++
++    std::cerr << "Workload: " << numData << " ops" << std::endl;
++
++
++    std::atomic<int> next_thread_id;
++
++
++    {
++        // Run
++        next_thread_id.store(0);
++        auto func = [&]() {
++            int thread_id = next_thread_id.fetch_add(1);
++
++            for (int i = thread_id; i < numData; i+= n_threads) {
++                Operation & op = workload.ops[i];
++
++                uint64_t results[2048];
++
++                switch(op.type) {
++                case OperationType::INSERT:
++                case OperationType::UPDATE:
++                    tree->put(op.key, (void*)op.value);
++                    break;
++
++                case OperationType::GET:
++                    tree->get(op.key);
++                    break;
++
++                case OperationType::DELETE:
++                    tree->del(op.key);
++                    break;
++
++                case OperationType::RANGE:
++                    tree->scan(op.key, 2048, results);
++                    break;
++
++                case OperationType::PRINT:
++                    break;
++
++                default:
++                    assert(false);
++                    break;
++                }                
+             }
+-        }
+-    }
++        };
++
++        std::vector<std::thread> thread_group;
+ 
++        for (int i = 0; i < n_threads; i++)
++            thread_group.push_back(std::thread{func});
++
++        for (int i = 0; i < n_threads; i++)
++            thread_group[i].join();
++    }
+ 
+-//    run(argv);
+     return 0;
+ }

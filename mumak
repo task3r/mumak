@@ -34,9 +34,9 @@ TIMEFORMAT='%R'
 
 # Paths & Executables
 if [[ -z $MUMAK_ROOT ]]; then
-    MUMAK_TOOL_PATH="./instrumentation/src/obj-intel64"
+    MUMAK_TOOL_PATH="./src/instrumentation/obj-intel64"
 else
-    MUMAK_TOOL_PATH="$MUMAK_ROOT/instrumentation/src/obj-intel64"
+    MUMAK_TOOL_PATH="$MUMAK_ROOT/src/instrumentation/obj-intel64"
 fi
 
 if [[ -z $PIN_ROOT ]]; then
@@ -49,7 +49,7 @@ fi
 MUMAK_BFI_PATH="$MUMAK_TOOL_PATH/bfi.so"
 MUMAK_ONTA_PATH="$MUMAK_TOOL_PATH/onta.so"
 MUMAK_OFTA_PATH="$MUMAK_TOOL_PATH/ofta.so"
-MUMAK_ANALYZER_PATH="$MUMAK_TOOL_PATH/trace_analyzer.exe"
+MUMAK_ANALYZER_PATH="$MUMAK_ROOT/src/bin/oftp"
 
 function main {
     parse_args "$@"
@@ -93,13 +93,13 @@ function main {
 function mumak_vanilla {
     $VERBOSE && echo "vanilla -- $TARGET"
     if [[ -z $CLIENT ]]; then
-        $TARGET
+        eval $TARGET
     else
-        $TARGET &
+        eval $TARGET &
         target_pid=$!
         sleep $SLEEP_PERIOD
-        $CLIENT
-        [[ -n $TERMINATION ]] && $TERMINATION
+        eval $CLIENT
+        [[ -n $TERMINATION ]] && eval $TERMINATION
         wait $target_pid &>/dev/null
     fi
 }
@@ -177,7 +177,7 @@ function basic_inject_fault {
     if [[ -z $CLIENT ]]; then
         # for some reason this does not work if $TARGET is double-quoted
         # shellcheck disable=SC2086
-        timeout -s SIGKILL $MAX_TIME_TO_INJECT $PIN -t "$tool" -trace-out \
+        eval timeout -s SIGKILL $MAX_TIME_TO_INJECT $PIN -t "$tool" -trace-out \
             $RAMDISK/fp-backtrace.out -tree $RAMDISK/tree.bin -target \
             "$INSTRUCTION" -inject -alloc "$ALLOC" -pm-mount "$PM_MOUNT" \
             $aux_opt -- $TARGET
@@ -190,8 +190,8 @@ function basic_inject_fault {
         target_pid=$!
         (
             sleep $SLEEP_PERIOD
-            $CLIENT
-            [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+            eval $CLIENT
+            [[ -n $TERMINATION ]] && eval $TERMINATION &>/dev/null
         ) &
         client_pid=$!
         wait $target_pid &>/dev/null
@@ -207,14 +207,14 @@ function basic_recover {
     local target_pid
     local client_pid
     if [[ -z $CLIENT_RECOVERY ]]; then
-        timeout -s SIGKILL $RECOVERY_TIMEOUT $RECOVERY
+        eval timeout -s SIGKILL $RECOVERY_TIMEOUT $RECOVERY
     else
-        timeout -s SIGKILL $RECOVERY_TIMEOUT $RECOVERY &
+        eval timeout -s SIGKILL $RECOVERY_TIMEOUT $RECOVERY &
         target_pid=$!
         (
             sleep $SLEEP_PERIOD
-            $CLIENT_RECOVERY
-            [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+            eval $CLIENT_RECOVERY
+            [[ -n $TERMINATION ]] && eval $TERMINATION &>/dev/null
         ) &
         client_pid=$!
         wait $target_pid &>/dev/null
@@ -231,17 +231,17 @@ function count_fps {
     [[ -n $SETUP ]] && $SETUP &>/dev/null
     # count failure points
     if [[ -z $CLIENT ]]; then
-        $PIN -t "$MUMAK_BFI_PATH" -tree $RAMDISK/tree.bin -count-out \
+        eval $PIN -t "$MUMAK_BFI_PATH" -tree $RAMDISK/tree.bin -count-out \
             $RAMDISK/bfi-fp-count.out -target "$INSTRUCTION" -alloc "$ALLOC" \
             -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
     else
-        $PIN -t "$MUMAK_BFI_PATH" -tree $RAMDISK/tree.bin -count-out \
+        eval $PIN -t "$MUMAK_BFI_PATH" -tree $RAMDISK/tree.bin -count-out \
             $RAMDISK/bfi-fp-count.out -target "$INSTRUCTION" -alloc "$ALLOC" \
             -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
         target_pid=$!
         sleep $SLEEP_PERIOD
-        $CLIENT &>/dev/null
-        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        eval $CLIENT &>/dev/null
+        [[ -n $TERMINATION ]] && eval $TERMINATION &>/dev/null
         wait $target_pid &>/dev/null
     fi
 }
@@ -278,13 +278,13 @@ function mumak_onta {
 
     [[ -n $SETUP ]] && $SETUP &>/dev/null
     if [[ -z $CLIENT ]]; then
-        $PIN -t "$MUMAK_ONTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
+        eval $PIN -t "$MUMAK_ONTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
     else
-        $PIN -t "$MUMAK_ONTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
+        eval $PIN -t "$MUMAK_ONTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
         target_pid=$!
         sleep $SLEEP_PERIOD
-        $CLIENT >/dev/null
-        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        eval $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && eval $TERMINATION &>/dev/null
         wait $target_pid &>/dev/null
     fi
 }
@@ -294,15 +294,15 @@ function mumak_dofta {
 
     [[ -n $SETUP ]] && $SETUP &>/dev/null
     if [[ -z $CLIENT ]]; then
-        $PIN -t "$MUMAK_OFTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- \
+        eval $PIN -t "$MUMAK_OFTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- \
             $TARGET >/dev/null
     else
-        $PIN -t "$MUMAK_OFTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- \
+        eval $PIN -t "$MUMAK_OFTA_PATH" -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- \
             $TARGET >/dev/null &
         target_pid=$!
         sleep $SLEEP_PERIOD
-        $CLIENT >/dev/null
-        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        eval $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && eval $TERMINATION &>/dev/null
         wait $target_pid &>/dev/null
     fi
 
@@ -312,15 +312,15 @@ function mumak_dofta {
 
     [[ -n $SETUP ]] && $SETUP &>/dev/null
     if [[ -z $CLIENT ]]; then
-        $PIN -t "$MUMAK_OFTA_PATH" -backtrace -dir "$RAMDISK" \
+        eval $PIN -t "$MUMAK_OFTA_PATH" -backtrace -dir "$RAMDISK" \
             -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
     else
-        $PIN -t "$MUMAK_OFTA_PATH" -backtrace -dir "$RAMDISK" \
+        eval $PIN -t "$MUMAK_OFTA_PATH" -backtrace -dir "$RAMDISK" \
             -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
         target_pid=$!
         sleep $SLEEP_PERIOD
-        $CLIENT >/dev/null
-        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        eval $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && eval $TERMINATION &>/dev/null
         wait $target_pid &>/dev/null
     fi
 }
@@ -330,15 +330,15 @@ function mumak_ndofta {
 
     [[ -n $SETUP ]] && $SETUP &>/dev/null
     if [[ -z $CLIENT ]]; then
-        $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic \
+        eval $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic \
             -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
     else
-        $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic \
+        eval $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic \
             -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
         target_pid=$!
         sleep $SLEEP_PERIOD
         $CLIENT >/dev/null
-        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        [[ -n $TERMINATION ]] && eval $TERMINATION &>/dev/null
         wait $target_pid &>/dev/null
     fi
 
@@ -348,15 +348,15 @@ function mumak_ndofta {
 
     [[ -n $SETUP ]] && $SETUP &>/dev/null
     if [[ -z $CLIENT ]]; then
-        $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic -backtrace \
+        eval $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic -backtrace \
             -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null
     else
-        $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic -backtrace \
+        eval $PIN -t "$MUMAK_OFTA_PATH" -non-deterministic -backtrace \
             -dir "$RAMDISK" -pm-mount "$PM_MOUNT" -- $TARGET >/dev/null &
         target_pid=$!
         sleep $SLEEP_PERIOD
-        $CLIENT >/dev/null
-        [[ -n $TERMINATION ]] && $TERMINATION &>/dev/null
+        eval $CLIENT >/dev/null
+        [[ -n $TERMINATION ]] && eval $TERMINATION &>/dev/null
         wait $target_pid &>/dev/null
     fi
 }

@@ -29,6 +29,19 @@ function printNumLinesWithoutComments {
 }
 
 #Obtain number of PMTest annotations
+echo "[Witcher Annotations]"
+echo "Cloning repos..."
+(
+    mkdir wticher && cd "$_" || exit
+    git clone --quiet https://github.com/cosmoss-jigu/witcher
+    git clone --quiet https://github.com/pmem/pmdk.git
+    (cd pmdk && git checkout --quiet tags/1.8)
+
+    echo "PMDK Modifications:"
+    printNumLinesWithoutComments "" "witcher/pmdk-1.8/src/ pmdk/src/"
+)
+
+#Obtain number of PMTest annotations
 echo "[PMTest Annotations]"
 echo "Cloning repos..."
 (
